@@ -33,7 +33,51 @@ try:
 except Exception:
     _kaleido_ok = False
 
+# ----------------- PASSWORD PROTECTION v2 -----------------
+def check_password():
+    """Returns `True` if the user had a correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == "888":
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input(
+            "पासवर्ड दर्ज करें", type="password", on_change=password_entered, key="password"
+        )
+        # Add a login button
+        if st.button("लॉगिन"):
+            password_entered()
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password not correct, show input + error and ask user to try again.
+        st.text_input(
+            "पासवर्ड दर्ज करें", type="password", on_change=password_entered, key="password"
+        )
+        # Add a login button
+        if st.button("लॉगिन"):
+            password_entered()
+        st.error("😕 गलत पासवर्ड!")
+        return False
+    else:
+        # Password correct.
+        return True
+
+if check_password():
+    # --- बाकी का डैशबोर्ड कोड यहाँ से शुरू होगा ---
+    pass # यह लाइन बस एक प्लेसहोल्डर है, इसे हटा दें
+else:
+    st.stop()
+# ---------------------------------------------------------
+
+
 __VERSION__ = "Power By Rehan"
+
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
