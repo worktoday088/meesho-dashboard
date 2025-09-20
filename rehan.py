@@ -33,48 +33,49 @@ try:
 except Exception:
     _kaleido_ok = False
 
-# ----------------- PASSWORD PROTECTION v2 -----------------
+# ----------------- PASSWORD PROTECTION v3 (Safer) -----------------
 def check_password():
     """Returns `True` if the user had a correct password."""
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "888":
+        # Check if the password key exists in session state
+        if "password" in st.session_state and st.session_state["password"] == "888":
             st.session_state["password_correct"] = True
             del st.session_state["password"]  # don't store password
         else:
             st.session_state["password_correct"] = False
 
+    # Initialize password_correct if it doesn't exist
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
+        st.session_state["password_correct"] = False
+
+    # Show password input if not authenticated
+    if not st.session_state["password_correct"]:
         st.text_input(
             "पासवर्ड दर्ज करें", type="password", on_change=password_entered, key="password"
         )
-        # Add a login button
         if st.button("लॉगिन"):
-            password_entered()
-        return False
-    elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error and ask user to try again.
-        st.text_input(
-            "पासवर्ड दर्ज करें", type="password", on_change=password_entered, key="password"
-        )
-        # Add a login button
-        if st.button("लॉगिन"):
-            password_entered()
-        st.error("😕 गलत पासवर्ड!")
+            password_entered() # Re-run password check on button click
+        
+        # Display error message if there was a wrong attempt
+        if "password" in st.session_state and not st.session_state["password_correct"]:
+             st.error("😕 गलत पासवर्ड!")
         return False
     else:
-        # Password correct.
         return True
 
 if check_password():
     # --- बाकी का डैशबोर्ड कोड यहाँ से शुरू होगा ---
-    pass # यह लाइन बस एक प्लेसहोल्डर है, इसे हटा दें
+    __VERSION__ = "Power By Rehan"
+    
+    # ---------------- PAGE SETUP ----------------
+    st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
+    st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
+    # ... (और बाकी की पूरी स्क्रिप्ट)
 else:
     st.stop()
-# ---------------------------------------------------------
-
+# --------------------------------------------------------------------
 
 __VERSION__ = "Power By Rehan"
 
@@ -1101,3 +1102,4 @@ with col_pdf2:
         st.info("Compact PDF के लिए kaleido ज़रूरी है।")
 
 st.success("✅ test_11 ready — merged original features + SKU Groups + Chart toggles + PDF/Excel improvements")
+
