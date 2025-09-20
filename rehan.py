@@ -66,7 +66,18 @@ def check_password():
         return True
 
 if check_password():
-    # --- बाकी का डैशबोर्ड कोड यहाँ से शुरू होगा ---
+
+    __VERSION__ = "Power By Rehan"
+    
+    # ---------------- PAGE SETUP ----------------
+    st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
+    st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
+    # ... (और बाकी की पूरी स्क्रिप्ट)
+else:
+    st.stop()
+# --------------------------------------------------------------------
+
+    
     __VERSION__ = "Power By Rehan"
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
@@ -1090,5 +1101,6 @@ with col_pdf2:
         st.info("Compact PDF के लिए kaleido ज़रूरी है।")
 
 st.success("✅ test_11 ready — merged original features + SKU Groups + Chart toggles + PDF/Excel improvements")
+
 
 
