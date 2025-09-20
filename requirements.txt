@@ -8,3 +8,4 @@ kaleido
 PyPDF2
 pillow
 reportlab
+xlsxwriter
