@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 
 def generate_reports_and_stats(old_df, new_df):
     """
@@ -30,47 +34,27 @@ def generate_reports_and_stats(old_df, new_df):
     
     main_data = merged_df[merged_df[unique_col] != 0].copy()
     
-    # --- डैशबोर्ड मैट्रिक्स की गणना ---
+    # डैशबोर्ड मैट्रिक्स की गणना
     payout_df = main_data[main_data["Remarks"] == "Payout Settlement Amount"].copy()
     new_order_df = main_data[main_data["Remarks"] == "New Order"].copy()
     
-    # 'Present in Both' से समायोजन राशि की गणना
     present_in_both_df = main_data[(main_data["Remarks"] == "Present in Both") & (main_data["Difference (Old - New)"] != 0)].copy()
     discrepancy_sum = present_in_both_df['Difference (Old - New)'].sum()
 
-    old_data_count = len(old_df)
-    old_data_sum = old_df[amount_col].sum()
-
-    payout_count = len(payout_df)
-    payout_sum = payout_df["Difference (Old - New)"].sum()
-
-    remaining_count = old_data_count - payout_count
-    remaining_sum = old_data_sum - payout_sum
-    
-    new_orders_count = len(new_order_df)
-    new_orders_sum = new_order_df["New Amount"].sum()
-    
-    final_total_count = remaining_count + new_orders_count
-    final_total_sum = remaining_sum + new_orders_sum
-    
-    # अंतिम शुद्ध देय राशि
+    old_data_count, old_data_sum = len(old_df), old_df[amount_col].sum()
+    payout_count, payout_sum = len(payout_df), payout_df["Difference (Old - New)"].sum()
+    remaining_count, remaining_sum = old_data_count - payout_count, old_data_sum - payout_sum
+    new_orders_count, new_orders_sum = len(new_order_df), new_order_df["New Amount"].sum()
+    final_total_count, final_total_sum = remaining_count + new_orders_count, remaining_sum + new_orders_sum
     clean_final_due = final_total_sum - discrepancy_sum
     
     stats = {
-        "old_count": old_data_count, "old_sum": old_data_sum,
-        "payout_count": payout_count, "payout_sum": payout_sum,
-        "remaining_count": remaining_count, "remaining_sum": remaining_sum,
-        "new_count": new_orders_count, "new_sum": new_orders_sum,
-        "final_count": final_total_count, "final_sum": final_total_sum,
-        "discrepancy_sum": discrepancy_sum,
-        "clean_final_due": clean_final_due,
+        "old_count": old_data_count, "old_sum": old_data_sum, "payout_count": payout_count, "payout_sum": payout_sum,
+        "remaining_count": remaining_count, "remaining_sum": remaining_sum, "new_count": new_orders_count, "new_sum": new_orders_sum,
+        "final_count": final_total_count, "final_sum": final_total_sum, "discrepancy_sum": discrepancy_sum, "clean_final_due": clean_final_due,
     }
 
-    reports = {
-        "Full Report": main_data, "Discrepancy_Details": present_in_both_df,
-        "Old Data Sheet": old_df, "New Data Sheet": new_df
-    }
-    
+    reports = {"Full Report": main_data, "Discrepancy_Details": present_in_both_df, "Old Data Sheet": old_df, "New Data Sheet": new_df}
     return reports, stats
 
 def to_excel(reports):
@@ -80,6 +64,36 @@ def to_excel(reports):
         for sheet_name, df in reports.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
     return output.getvalue()
+
+def generate_pdf(df, title):
+    """डेटाफ़्रेम से PDF बनाने का फ़ंक्शन"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    elements.append(Paragraph(title, styles['h1']))
+    
+    # डेटा को सूची में बदलना
+    data = [df.columns.to_list()] + df.values.tolist()
+    
+    # टेबल बनाना और स्टाइल करना
+    table = Table(data)
+    style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ])
+    table.setStyle(style)
+    elements.append(table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 # --- Streamlit App UI ---
 st.set_page_config(page_title="Advanced Payment Reconciliation Tool", layout="wide")
@@ -104,50 +118,53 @@ if old_file and new_file:
 
         # --- Key Metrics Dashboard ---
         st.header("📊 Key Metrics Dashboard")
+        # (Dashboard code remains the same as before)
         col1, col2, col3, col4 = st.columns(4)
-        
         with col1:
             st.subheader("पुराना हिसाब")
             st.metric("कुल पुराने ऑर्डर", f"{stats['old_count']}", f"₹{stats['old_sum']:,.2f}")
             st.metric("भुगतान हुए ऑर्डर", f"- {stats['payout_count']}", f"- ₹{stats['payout_sum']:,.2f}", delta_color="inverse")
             st.metric("बकाया पुराने ऑर्डर", f"{stats['remaining_count']}", f"₹{stats['remaining_sum']:,.2f}")
-        
         with col2:
             st.subheader("नया हिसाब")
             st.metric("कुल नए ऑर्डर", f"{stats['new_count']}", f"₹{stats['new_sum']:,.2f}")
-        
         with col3:
             st.subheader("कुल बकाया")
             st.metric("कुल बकाया ऑर्डर", f"{stats['final_count']}", f"₹{stats['final_sum']:,.2f}")
-
         with col4:
             st.subheader("अंतिम देय राशि")
             st.metric("अन्य समायोजन", f"- ₹{stats['discrepancy_sum']:,.2f}", delta_color="inverse")
             st.metric("अंतिम शुद्ध देय राशि", f"₹{stats['clean_final_due']:,.2f}")
 
-        # --- समायोजन विवरण तालिका ---
+        # --- समायोजन विवरण तालिका और PDF डाउनलोड ---
         st.header("📋 समायोजन विवरण (Discrepancy Details)")
         discrepancy_table = reports['Discrepancy_Details'].copy()
         
         if not discrepancy_table.empty:
-            grand_total_row = pd.DataFrame([{
-                'Sub Order No': 'Grand Total',
-                'Difference (Old - New)': discrepancy_table['Difference (Old - New)'].sum()
-            }])
-            discrepancy_table = pd.concat([discrepancy_table, grand_total_row], ignore_index=True)
-            discrepancy_table.insert(0, 'S.No', range(1, len(discrepancy_table) + 1))
-            st.dataframe(discrepancy_table.fillna(''))
+            grand_total_row = pd.DataFrame([{'Sub Order No': 'Grand Total', 'Difference (Old - New)': discrepancy_table['Difference (Old - New)'].sum()}])
+            discrepancy_table_for_display = pd.concat([discrepancy_table, grand_total_row], ignore_index=True).fillna('')
+            discrepancy_table_for_display.insert(0, 'S.No', range(1, len(discrepancy_table_for_display) + 1))
+            
+            # PDF बनाने के लिए डेटा तैयार करना (Grand Total के साथ)
+            pdf_df = discrepancy_table_for_display.copy()
+            pdf_buffer = generate_pdf(pdf_df, "समायोजन विवरण (Discrepancy Details)")
+            
+            # PDF डाउनलोड बटन
+            st.download_button(
+                label="📄 Download as PDF",
+                data=pdf_buffer,
+                file_name="discrepancy_details.pdf",
+                mime="application/pdf"
+            )
+            
+            # तालिका दिखाना
+            st.dataframe(discrepancy_table_for_display)
         else:
             st.info("कोई समायोजन विवरण नहीं मिला।")
 
-        # --- Download Button ---
-        st.header("📥 Download Full Data")
-        st.download_button(
-            label="Download Complete Report (Excel)",
-            data=excel_data,
-            file_name="complete_reconciliation_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        # --- Excel Download Button ---
+        st.header("📥 Download Full Data in Excel")
+        st.download_button(label="Download Complete Report (Excel)", data=excel_data, file_name="complete_reconciliation_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     except Exception as e:
         st.error(f"एक त्रुटि हुई: {e}. कृपया अपनी फ़ाइलों, शीट के नाम ('Order Payments') और कॉलम के नाम की जाँच करें।")
