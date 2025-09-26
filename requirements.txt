@@ -10,3 +10,4 @@ pillow
 reportlab
 xlsxwriter
 PyMuPDF
+fpdf2
