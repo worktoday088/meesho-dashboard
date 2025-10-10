@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO, StringIO
 
-# Master Color List with popular Indian and international fashion shades
 COLOR_LIST = [
     'BLACK', 'WHITE', 'GREY', 'PINK', 'PURPLE', 'WINE', 'BOTTLE GREEN', 'PEACH',
     'CREAM', 'BROWN', 'BLUE', 'RED', 'YELLOW', 'NAVY', 'NAVY BLUE', 'PETROL',
@@ -14,19 +14,28 @@ COLOR_LIST = [
 ]
 
 def clean_text(text):
-    # Normalize text: strip spaces, remove underscores/dashes, lowercase
     if pd.isnull(text):
         return ''
     text = str(text).strip().replace('_', ' ').replace('-', ' ')
-    return ' '.join(text.split()).lower()  # also removes extra inner spaces
+    return ' '.join(text.split()).lower()
 
 def extract_color(sku):
     sku_clean = clean_text(sku).replace(' ', '')
     found_colors = [col for col in COLOR_LIST if col.replace(' ', '').lower() in sku_clean]
     return ', '.join(found_colors) if found_colors else ''
 
+def to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Sheet1')
+    processed_data = output.getvalue()
+    return processed_data
+
+def to_csv(df):
+    return df.to_csv(index=False).encode('utf-8')
+
 def main():
-    st.title('Full Featured SKU Color Extractor & CSV/Excel Cleaner')
+    st.title('SKU Color Extractor & CSV/Excel Cleaner')
 
     uploaded_file = st.file_uploader('Upload your Excel/CSV file', type=['xlsx', 'csv'])
     if uploaded_file:
@@ -39,27 +48,16 @@ def main():
             st.error(f"Error reading file: {e}")
             return
 
-        # Clean columns names too
         df.columns = df.columns.str.strip()
-
-        # Choose SKU column
         sku_col = 'SKU' if 'SKU' in df.columns else st.selectbox('Select SKU column:', df.columns)
-
-        # Clean SKU column text
         df[sku_col] = df[sku_col].apply(clean_text)
-
-        # Extract colors
         df['Color'] = df[sku_col].apply(extract_color)
 
         st.subheader('Cleaned Data with Extracted Colors')
         st.dataframe(df)
 
-        # Download buttons
-        to_excel = df.to_excel(index=False)
-        to_csv = df.to_csv(index=False)
-
-        st.download_button(label='Download as Excel', data=to_excel, file_name='Cleaned_ExtractedColors.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        st.download_button(label='Download as CSV', data=to_csv, file_name='Cleaned_ExtractedColors.csv', mime='text/csv')
+        st.download_button(label='Download as Excel', data=to_excel(df), file_name='Cleaned_ExtractedColors.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        st.download_button(label='Download as CSV', data=to_csv(df), file_name='Cleaned_ExtractedColors.csv', mime='text/csv')
 
         st.success('File cleaned and colors extracted successfully!')
 
