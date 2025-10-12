@@ -12,3 +12,4 @@ xlsxwriter
 PyMuPDF
 fpdf2
 reportlab 
+pdfplumber
