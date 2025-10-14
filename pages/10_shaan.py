@@ -1,164 +1,109 @@
-# --------------------------------------------------------------
-# 📦 Meesho Invoice Auto Sourcing Sorter (v5 - Stable Version)
-# --------------------------------------------------------------
-# Required:
-# pip install streamlit PyPDF2 pdfplumber
-# Run:
-# streamlit run Meesho_PDF_Sorter_v5.py
-
 import streamlit as st
-import pdfplumber
+import pdfplumber, hashlib
 from PyPDF2 import PdfReader, PdfWriter
 import re
 from io import BytesIO
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
-st.set_page_config(page_title="Meesho PDF Smart Sorter v5", layout="centered")
+st.set_page_config(page_title="Meesho PDF Auto Sorter v6", layout="wide")
+st.title("📦 Meesho Invoice Auto Sourcing – Final v6")
+st.caption("Developed for Bilal Sir — Courier ➜ Style ➜ Size")
 
-st.title("📦 Meesho Invoice Auto Sourcing – Final v5")
-st.caption("Developed for Bilal Sir — Fully stable version (courier → style → size with duplicate fix)")
-
-# ----------------------------------------------------
-# Configuration
-# ----------------------------------------------------
 COURIER_PRIORITY = ["Shadowfax", "Xpress Bees", "Delhivery", "Valmo"]
 SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
-
-STYLE_CANONICAL = [
-    (r"zeme[- ]?0?1", "ZEME-01"),
-    (r"2[- ]?pc[s]?", "2-PC"),
-    (r"2[- ]?(tape|strip)", "2-TAPE"),
-    (r"\bfruit\b", "FRUIT"),
-    (r"\bcrop\b", "CROP"),
-    (r"-2-s\b", "OF"),
-    (r"\bof\b", "OF")
+STYLE_GROUPS = [
+    (["zeme-01","zeme01","2-pc","2pcs","2 pcs","2pcs jumpsuit","2-pcs jumpsuit"], "Jumpsuit"),
+    (["2 tape","2 strip","2-tape","2-strip"], "2-Tape"),
+    (["of","-2-s"], "Combo 2-Tape"),
+    (["fruit"], "Fruit"),
+    (["crop"], "Crop Hoodie"),
+    (["plain"], "Plain Trouser"),
 ]
 
-# ----------------------------------------------------
-# Helper functions
-# ----------------------------------------------------
-def detect_courier(text):
+def detect_courier(t):
     for c in COURIER_PRIORITY:
-        if re.search(re.escape(c), text, re.IGNORECASE):
-            return c
+        if re.search(re.escape(c), t, re.IGNORECASE): return c
     return "UNKNOWN"
-
-def detect_canonical_style(text):
-    t = text.lower()
-    for pat, canon in STYLE_CANONICAL:
-        if re.search(pat, t):
-            return canon
-    return "OTHER"
-
-def detect_size(text):
-    """Detect only first valid size from XS,S,M,L,XL,XXL in page text"""
-    found = []
+def detect_style(t):
+    t=t.lower()
+    for pats,name in STYLE_GROUPS:
+        for p in pats:
+            if re.search(rf"\b{re.escape(p)}\b", t): return name
+    return "Other"
+def detect_size(t):
     for s in SIZE_ORDER:
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(s)}(?![A-Za-z0-9])", text, re.IGNORECASE):
-            found.append(s)
-    if found:
-        # unique sizes, keep first in order of SIZE_ORDER
-        for s in SIZE_ORDER:
-            if s in found:
-                return s
+        if re.search(rf"(?<![A-Za-z0-9]){re.escape(s)}(?![A-Za-z0-9])", t, re.IGNORECASE):
+            return s
     return "NA"
 
-# ----------------------------------------------------
-# Main Streamlit UI
-# ----------------------------------------------------
-uploaded_file = st.file_uploader("📤 Upload Meesho Invoice PDF", type=["pdf"])
+# --- State init ---
+if "buffers" not in st.session_state: st.session_state.buffers = {}
+if "meta" not in st.session_state: st.session_state.meta = {}
+if "ready" not in st.session_state: st.session_state.ready = False
+if "file_key" not in st.session_state: st.session_state.file_key = None
 
-if uploaded_file:
-    reader = PdfReader(uploaded_file)
+@st.cache_data(show_spinner=False)
+def build_cached(pdf_bytes: bytes):
+    reader = PdfReader(BytesIO(pdf_bytes))
     total_pages = len(reader.pages)
-    st.info(f"Total pages detected: {total_pages}")
+    hierarchy = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    unparsed = []
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for i,p in enumerate(pdf.pages):
+            text = p.extract_text() or ""
+            c = detect_courier(text); s = detect_style(text); z = detect_size(text)
+            hierarchy[c][s][z].append(i)
+            if c=="UNKNOWN" and s=="Other" and z=="NA": unparsed.append(i)
+    # pre-merge buffers
+    buffers = {}
+    for c in COURIER_PRIORITY:
+        styles = hierarchy.get(c,{})
+        for style_name, sizes_dict in styles.items():
+            if not any(sizes_dict.values()): continue
+            w = PdfWriter(); added=set()
+            for z in SIZE_ORDER+["NA"]:
+                for p in sizes_dict.get(z, []):
+                    if p not in added:
+                        w.add_page(reader.pages[p]); added.add(p)
+            buf = BytesIO(); w.write(buf); buf.seek(0)
+            buffers[(c,style_name)] = buf
+    return buffers, {"pages": total_pages, "unparsed": unparsed}
 
-    # courier -> style -> size -> list of page indexes
-    hierarchy = {c: OrderedDict() for c in COURIER_PRIORITY}
-    hierarchy["UNKNOWN"] = OrderedDict()
-    unparsed_pages = []
+uploaded = st.file_uploader("📤 Upload Meesho Invoice PDF", type=["pdf"])
 
-    with pdfplumber.open(uploaded_file) as pdf:
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            courier = detect_courier(text)
-            style = detect_canonical_style(text)
-            size = detect_size(text)
+# Build once per unique file
+if uploaded and not st.session_state.ready:
+    file_bytes = uploaded.read()
+    file_key = hashlib.md5(file_bytes).hexdigest()
+    if st.session_state.file_key != file_key:
+        buffers, meta = build_cached(file_bytes)
+        st.session_state.buffers = buffers
+        st.session_state.meta = meta
+        st.session_state.file_key = file_key
+    st.session_state.ready = True
 
-            # initialize dict structure
-            if style not in hierarchy.setdefault(courier, OrderedDict()):
-                hierarchy[courier][style] = OrderedDict()
-            hierarchy[courier][style].setdefault(size, [])
+# Static info (no spinner on rerun)
+if st.session_state.ready:
+    m = st.session_state.meta
+    st.info(f"📄 Total pages detected: {m.get('pages',0)}")
+    if m.get("unparsed"): st.warning(f"⚠️ {len(m['unparsed'])} pages could not be identified. Example: {m['unparsed'][:10]}")
+    st.header("📦 Download Courier + Style-wise Sorted PDFs")
 
-            # Prevent duplicates: add only if page not already in same style-size list
-            if i not in hierarchy[courier][style][size]:
-                hierarchy[courier][style][size].append(i)
-
-            if courier == "UNKNOWN" and style == "OTHER" and size == "NA":
-                unparsed_pages.append(i)
-
-    st.success("✅ PDF processed successfully!")
-
-    # Quick preview
-    preview = []
-    for c in COURIER_PRIORITY + ["UNKNOWN"]:
-        if c not in hierarchy:
-            continue
-        for style, sizes in hierarchy[c].items():
-            for size, pages in sizes.items():
-                preview.append({"Courier": c, "Style": style, "Size": size, "Pages": len(pages)})
-    st.dataframe(preview[:40])
-
-    if unparsed_pages:
-        st.warning(f"{len(unparsed_pages)} pages could not be parsed. (e.g. pages: {unparsed_pages[:10]})")
-
-    # ----------------------------------------------------
-    # Courier-wise output
-    # ----------------------------------------------------
-    st.subheader("📦 Download Sorted PDFs (Courier-wise)")
-
-    for courier in COURIER_PRIORITY:
-        styles_dict = hierarchy.get(courier, {})
-        if not styles_dict:
-            st.write(f"❌ No pages found for {courier}")
-            continue
-
-        writer = PdfWriter()
-
-        # determine fixed style order (canonical)
-        canon_order = [canon for _, canon in STYLE_CANONICAL]
-        observed_styles = list(styles_dict.keys())
-        ordered_styles = []
-        for ccanon in canon_order:
-            if ccanon in observed_styles and ccanon not in ordered_styles:
-                ordered_styles.append(ccanon)
-        for s in observed_styles:
-            if s not in ordered_styles:
-                ordered_styles.append(s)
-
-        # write pages
-        for style in ordered_styles:
-            sizes_map = styles_dict.get(style, {})
-            # size order stable
-            for s in SIZE_ORDER + ["NA"]:
-                pages_for_size = sizes_map.get(s, [])
-                # avoid repeats (if duplicate sizes exist)
-                added = set()
-                for page_index in pages_for_size:
-                    if page_index not in added:
-                        writer.add_page(reader.pages[page_index])
-                        added.add(page_index)
-
-        buf = BytesIO()
-        writer.write(buf)
-        buf.seek(0)
-        st.download_button(
-            label=f"⬇️ Download {courier} PDF",
-            data=buf,
-            file_name=f"{courier}_Sorted_v5.pdf",
-            mime="application/pdf"
-        )
-
-    st.success("🎉 Done! Each courier's PDF is now size-wise sorted and duplicates are fixed.")
+    # Pure download fragment: no processing, just buttons
+    with st.container():
+        for courier in COURIER_PRIORITY:
+            has_any = any(k[0]==courier for k in st.session_state.buffers)
+            if not has_any: continue
+            st.subheader(f"🚚 {courier}")
+            for (c, style), buf in st.session_state.buffers.items():
+                if c!=courier: continue
+                st.download_button(
+                    label=f"⬇️ Download {courier} – {style}",
+                    data=buf,
+                    file_name=f"{courier}_{style.replace(' ','_')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=False
+                )
+    st.success("🎉 All files ready! Download courier + style-wise sorted PDFs above.")
 else:
-    st.info("Please upload a Meesho Invoice PDF to start sorting.")
+    st.info("Please upload a Meesho Invoice PDF file to start sorting.")
