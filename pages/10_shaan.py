@@ -1,6 +1,10 @@
-# Meesho_PDF_Sorter_v4.py
-# Smart, stable grouping: courier -> canonical-style -> size -> pages
+# --------------------------------------------------------------
+# 📦 Meesho Invoice Auto Sourcing Sorter (v5 - Stable Version)
+# --------------------------------------------------------------
+# Required:
 # pip install streamlit PyPDF2 pdfplumber
+# Run:
+# streamlit run Meesho_PDF_Sorter_v5.py
 
 import streamlit as st
 import pdfplumber
@@ -9,15 +13,17 @@ import re
 from io import BytesIO
 from collections import defaultdict, OrderedDict
 
-st.set_page_config(page_title="Meesho PDF Smart Sorter v4", layout="centered")
-st.title("📦 Meesho Invoice Auto Sourcing – Advanced v4")
-st.caption("Stable grouping: courier → canonical-style → sizes (no repeated size blocks)")
+st.set_page_config(page_title="Meesho PDF Smart Sorter v5", layout="centered")
 
+st.title("📦 Meesho Invoice Auto Sourcing – Final v5")
+st.caption("Developed for Bilal Sir — Fully stable version (courier → style → size with duplicate fix)")
+
+# ----------------------------------------------------
 # Configuration
+# ----------------------------------------------------
 COURIER_PRIORITY = ["Shadowfax", "Xpress Bees", "Delhivery", "Valmo"]
 SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
 
-# base style patterns -> canonical name (order here defines preferred style order inside each courier)
 STYLE_CANONICAL = [
     (r"zeme[- ]?0?1", "ZEME-01"),
     (r"2[- ]?pc[s]?", "2-PC"),
@@ -28,6 +34,9 @@ STYLE_CANONICAL = [
     (r"\bof\b", "OF")
 ]
 
+# ----------------------------------------------------
+# Helper functions
+# ----------------------------------------------------
 def detect_courier(text):
     for c in COURIER_PRIORITY:
         if re.search(re.escape(c), text, re.IGNORECASE):
@@ -42,24 +51,31 @@ def detect_canonical_style(text):
     return "OTHER"
 
 def detect_size(text):
+    """Detect only first valid size from XS,S,M,L,XL,XXL in page text"""
+    found = []
     for s in SIZE_ORDER:
-        # match whole token like " M " or "(M)" etc.
         if re.search(rf"(?<![A-Za-z0-9]){re.escape(s)}(?![A-Za-z0-9])", text, re.IGNORECASE):
-            return s
+            found.append(s)
+    if found:
+        # unique sizes, keep first in order of SIZE_ORDER
+        for s in SIZE_ORDER:
+            if s in found:
+                return s
     return "NA"
 
+# ----------------------------------------------------
+# Main Streamlit UI
+# ----------------------------------------------------
 uploaded_file = st.file_uploader("📤 Upload Meesho Invoice PDF", type=["pdf"])
 
 if uploaded_file:
     reader = PdfReader(uploaded_file)
     total_pages = len(reader.pages)
-    st.info(f"Total pages: {total_pages}")
+    st.info(f"Total pages detected: {total_pages}")
 
-    # Build nested structure: courier -> style -> size -> list(page_indexes)
+    # courier -> style -> size -> list of page indexes
     hierarchy = {c: OrderedDict() for c in COURIER_PRIORITY}
-    hierarchy["UNKNOWN"] = OrderedDict()  # for uncategorized pages
-
-    # keep a list of pages that couldn't be parsed for quick debug
+    hierarchy["UNKNOWN"] = OrderedDict()
     unparsed_pages = []
 
     with pdfplumber.open(uploaded_file) as pdf:
@@ -69,34 +85,39 @@ if uploaded_file:
             style = detect_canonical_style(text)
             size = detect_size(text)
 
-            # ensure style entry exists
-            if style not in hierarchy.get(courier, {}):
-                hierarchy.setdefault(courier, OrderedDict())[style] = OrderedDict()
-            # ensure size list exists
-            hierarchy[courier][style].setdefault(size, []).append(i)
+            # initialize dict structure
+            if style not in hierarchy.setdefault(courier, OrderedDict()):
+                hierarchy[courier][style] = OrderedDict()
+            hierarchy[courier][style].setdefault(size, [])
 
-            # debug mark if nothing found
+            # Prevent duplicates: add only if page not already in same style-size list
+            if i not in hierarchy[courier][style][size]:
+                hierarchy[courier][style][size].append(i)
+
             if courier == "UNKNOWN" and style == "OTHER" and size == "NA":
                 unparsed_pages.append(i)
 
-    st.write("Detected summary (sample):")
-    # show small preview: for each courier list first few styles/sizes
+    st.success("✅ PDF processed successfully!")
+
+    # Quick preview
     preview = []
     for c in COURIER_PRIORITY + ["UNKNOWN"]:
         if c not in hierarchy:
             continue
         for style, sizes in hierarchy[c].items():
             for size, pages in sizes.items():
-                preview.append({"courier": c, "style": style, "size": size, "pages_count": len(pages)})
-    st.dataframe(preview[:50])
+                preview.append({"Courier": c, "Style": style, "Size": size, "Pages": len(pages)})
+    st.dataframe(preview[:40])
 
     if unparsed_pages:
-        st.warning(f"Warning: {len(unparsed_pages)} pages could not be parsed (pages: {unparsed_pages[:10]}...)")
+        st.warning(f"{len(unparsed_pages)} pages could not be parsed. (e.g. pages: {unparsed_pages[:10]})")
 
-    # Now create courier-wise PDF files using stable ordering:
-    st.subheader("📦 Download Per-Courier Sorted PDFs")
+    # ----------------------------------------------------
+    # Courier-wise output
+    # ----------------------------------------------------
+    st.subheader("📦 Download Sorted PDFs (Courier-wise)")
+
     for courier in COURIER_PRIORITY:
-        # if no pages for this courier, show message
         styles_dict = hierarchy.get(courier, {})
         if not styles_dict:
             st.write(f"❌ No pages found for {courier}")
@@ -104,45 +125,40 @@ if uploaded_file:
 
         writer = PdfWriter()
 
-        # Determine style iteration order:
-        # 1) use canonical order defined in STYLE_CANONICAL
-        # 2) then any other styles (OTHER or unexpected) in alphabetical order
+        # determine fixed style order (canonical)
         canon_order = [canon for _, canon in STYLE_CANONICAL]
         observed_styles = list(styles_dict.keys())
-        # keep unique preserving order: first canon that occur, then others
         ordered_styles = []
         for ccanon in canon_order:
             if ccanon in observed_styles and ccanon not in ordered_styles:
                 ordered_styles.append(ccanon)
-        # append remaining observed styles
         for s in observed_styles:
             if s not in ordered_styles:
                 ordered_styles.append(s)
 
-        # For each style, append pages in SIZE_ORDER order (sizes with page lists)
+        # write pages
         for style in ordered_styles:
             sizes_map = styles_dict.get(style, {})
-            # for sizes in SIZE_ORDER, then NA, then any others
+            # size order stable
             for s in SIZE_ORDER + ["NA"]:
                 pages_for_size = sizes_map.get(s, [])
+                # avoid repeats (if duplicate sizes exist)
+                added = set()
                 for page_index in pages_for_size:
-                    writer.add_page(reader.pages[page_index])
-            # append any unexpected sizes (keys not in SIZE_ORDER and not "NA")
-            for s_unexp in [k for k in sizes_map.keys() if k not in SIZE_ORDER and k != "NA"]:
-                for page_index in sizes_map[s_unexp]:
-                    writer.add_page(reader.pages[page_index])
+                    if page_index not in added:
+                        writer.add_page(reader.pages[page_index])
+                        added.add(page_index)
 
-        # write buffer and provide download
         buf = BytesIO()
         writer.write(buf)
         buf.seek(0)
         st.download_button(
             label=f"⬇️ Download {courier} PDF",
             data=buf,
-            file_name=f"{courier}_Sorted_v4.pdf",
+            file_name=f"{courier}_Sorted_v5.pdf",
             mime="application/pdf"
         )
 
-    st.success("Finished: courier-wise PDFs are ready. Each style's sizes appear as one contiguous block.")
+    st.success("🎉 Done! Each courier's PDF is now size-wise sorted and duplicates are fixed.")
 else:
-    st.info("Upload a Meesho PDF to process.")
+    st.info("Please upload a Meesho Invoice PDF to start sorting.")
