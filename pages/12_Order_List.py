@@ -287,9 +287,22 @@ def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
         out.append((s, pv))
     return out
 
+# ---------------- UI helper: Multiselect with in-list "Select All" ----------------
+def multiselect_with_select_all(label: str, options: List[str], default: List[str] = None, key: str = None) -> List[str]:
+    sentinel_all = '— Select All —'
+    shown_options = [sentinel_all] + options
+    default = default or []
+    # यदि default सभी विकल्प हैं तो Select All भी दिखे
+    default_shown = ([sentinel_all] + options) if set(default) == set(options) and options else default
+    picked = st.multiselect(label, options=shown_options, default=default_shown, key=key)
+    if sentinel_all in picked:
+        # केवल Select All चुना या Select All सहित चुना = सभी विकल्प select
+        return options.copy()
+    return [x for x in picked if x != sentinel_all]
+
 # ---------------- App ----------------
 def main():
-    st.title('Order List Dashboard (Blank Packet Id + Select All + Safe Filters + Grand Totals)')
+    st.title('Order List Dashboard (In-Filter Select All + Blank Packet Id + Safe Gating + Grand Totals)')
 
     with st.expander('Upload files'):
         uploads = st.file_uploader(
@@ -343,41 +356,22 @@ def main():
                     axis=1
                 )
 
-    # -------- Packet Id Filter with Select All --------
+    # -------- Packet Id Filter (in-filter Select All) --------
     st.subheader('Packet Id Filter')
-    sel_packets = []
     if 'Packet Id' in df.columns:
         all_packets_raw = df['Packet Id'].fillna('').astype(str)
         non_blank = sorted([x for x in all_packets_raw.unique().tolist() if x.strip() != ''])
-        packet_options = non_blank + ['Blank']
-        c1, c2 = st.columns([3,1])
-        with c1:
-            sel_packets = st.multiselect('Packet Id चुनें (Blank सहित)', options=packet_options, default=[])
-        with c2:
-            all_pk_toggle = st.checkbox('Select All', key='pkt_all')
-            if all_pk_toggle and len(sel_packets) != len(packet_options):
-                sel_packets = packet_options.copy()
-            elif not all_pk_toggle and len(sel_packets) == len(packet_options):
-                sel_packets = []
+        packet_options = non_blank + ['Blank']  # Blank at end
+        sel_packets = multiselect_with_select_all('Packet Id चुनें (Blank सहित)', options=packet_options, default=[], key='pkt_ms')
     else:
         st.warning('Packet Id कॉलम नहीं मिला।')
         sel_packets = []
 
-    # -------- Reason for Credit Entry Filter with Select All --------
+    # -------- Reason for Credit Entry Filter (in-filter Select All) --------
     st.subheader('Reason for Credit Entry Filter')
-    sel_status = []
-    all_status = []
     if 'Reason for Credit Entry' in df.columns:
         all_status = sorted(df['Reason for Credit Entry'].dropna().astype(str).unique().tolist())
-        c3, c4 = st.columns([3,1])
-        with c3:
-            sel_status = st.multiselect('Select Credit Entry Reasons', options=all_status, default=[])
-        with c4:
-            all_rs_toggle = st.checkbox('Select All', key='rs_all')
-            if all_rs_toggle and len(sel_status) != len(all_status):
-                sel_status = all_status.copy()
-            elif not all_rs_toggle and len(sel_status) == len(all_status):
-                sel_status = []
+        sel_status = multiselect_with_select_all('Select Credit Entry Reasons', options=all_status, default=[], key='rs_ms')
     else:
         st.warning('Reason for Credit Entry कॉलम नहीं मिला।')
         sel_status = []
@@ -385,7 +379,7 @@ def main():
     # Gate: require both filters to proceed
     filters_ready = bool(sel_packets) and bool(sel_status)
     if not filters_ready:
-        st.warning('रिपोर्ट देखने से पहले कृपया दोनों फ़िल्टर चुनें: Packet Id और Reason for Credit Entry. आप ऊपर के Select All से एक क्लिक में चुन सकते हैं.')
+        st.warning('रिपोर्ट देखने से पहले कृपया दोनों फ़िल्टर चुनें: Packet Id और Reason for Credit Entry. ड्रॉपडाउन के अंदर सबसे ऊपर "— Select All —" से एक क्लिक में सभी चुन सकते हैं।')
         with st.expander('मदद/Help'):
             st.write('जब तक दोनों फ़िल्टर खाली हैं, डेटा सारांश और डाउनलोड रोके गए हैं ताकि कोई त्रुटि न दिखे। पहले Packet Id चुनें, फिर Reason चुनें.')
         return
@@ -455,6 +449,7 @@ def main():
             st.download_button('Download Master List (PDF)', data=m_pdf,
                                file_name='Master_List.pdf', mime='application/pdf')
 
+    # All sheets bundle
     sheets = {'Data_Filtered': df_filtered, 'Pivot_Master': pv_master}
     for s, pv in pv_styles:
         sheets[f'Pivot_{s}'] = pv
@@ -463,7 +458,7 @@ def main():
                        file_name='All_Data_Pivots.xlsx',
                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
-    st.success('तैयार: Select All फ़िल्टर्स, Blank Packet Id, सुरक्षित गेटिंग, और Grand Total (right + bottom) Excel/PDF सहित लागू हो गए हैं।')
+    st.success('तैयार: In-filter Select All (दोनों फ़िल्टर्स), Blank Packet Id, सुरक्षित गेटिंग, और Grand Total (right + bottom) Excel/PDF सहित लागू हो गए हैं।')
 
 if __name__ == '__main__':
     main()
