@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# Streamlit App: Multi-file Merge → Color + Style (Search) → Packet Id Blank Filter → Pivots → Excel/PDF
-
 import streamlit as st
 import pandas as pd
 import unicodedata, re
@@ -16,7 +14,6 @@ st.set_page_config(page_title='SKU Processor', layout='wide')
 
 # ---------------- Color Lists ----------------
 COMPOUND_COLORS: List[str] = ['WHITE-RED','WHITE-BLUE','BLACK-YELLOW','BLACK-RED']
-
 COLOR_LIST: List[str] = [
     *COMPOUND_COLORS,
     'BLACK','WHITE','GREY','PINK','PURPLE','WINE','BOTTLE GREEN','PEACH','CREAM','BROWN',
@@ -41,15 +38,41 @@ def normalize(s: str) -> str:
 def key(s: str) -> str:
     return normalize(s).replace(' ', '')
 
-# ---------------- Style Rules (Default/Fallback) ----------------
+# --- Grand Total Append Helpers ---
+def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    non_num = ['Style ID','Size','Color']
+    num_cols = [c for c in df.columns if c not in non_num]
+    sums = df[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
+    out = df.copy()
+    out['Grand Total'] = sums
+    return out
+
+def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    num_cols = out.select_dtypes(include='number').columns.tolist()
+    if not num_cols:
+        possible_nums = [c for c in out.columns if c not in ['Style ID','Size','Color']]
+        num_cols = possible_nums
+        out[num_cols] = out[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+    total_row = {c: '' for c in out.columns}
+    if label_col in out.columns:
+        total_row[label_col] = 'Grand Total'
+    for c in num_cols:
+        total_row[c] = out[c].sum()
+    out = pd.concat([out, pd.DataFrame([total_row], columns=out.columns)], ignore_index=True)
+    return out
+
+# ---------------- Style Inference ----------------
 def derive_style_id_default(row: pd.Series) -> str:
     txt = f"{row.get('SKU','')} {row.get('Product Name','')}"
     tnorm = normalize(txt)
     tkey = key(txt)
-
     pant_cues = ['2tape','2strip','2-strip','2-stri','striptrouser','strippant','tapetrouser','tape-trouser']
     combo_cues_strict = ['packof2','2spant','2-s-pant','2s pant','2s-pant','-2-s-']
-
     if any(c in tkey for c in pant_cues):
         return '2 TAPE PANT'
     if any(c in tkey for c in combo_cues_strict):
@@ -64,7 +87,6 @@ def derive_style_id_default(row: pd.Series) -> str:
         return 'PLAIN-TROUSER'
     return ''
 
-# ---------------- User keyword rules ----------------
 @dataclass
 class StyleRule:
     patterns: list
@@ -93,21 +115,17 @@ def derive_style_id_with_user_rules(row: pd.Series, user_rules: List[StyleRule],
         return derive_style_id_default(row)
     return ''
 
-# ---------------- Color Extraction ----------------
 def extract_color_from_row(row: pd.Series) -> str:
     all_text = f"{row.get('SKU','')} {row.get('Product Name','')}"
     t = key(all_text)
     found: List[str] = []
-
     for comp in COMPOUND_COLORS:
         if key(comp) in t:
             found.append(comp)
-
     compound_components = set()
     for comp in found:
         for p in comp.split('-'):
             compound_components.add(p.strip().upper())
-
     for col in COLOR_LIST:
         if col in COMPOUND_COLORS:
             continue
@@ -115,7 +133,6 @@ def extract_color_from_row(row: pd.Series) -> str:
             if col.upper() in compound_components:
                 continue
             found.append(col)
-
     seen=set()
     unique=[]
     for c in found:
@@ -206,23 +223,13 @@ def master_pivot(df: pd.DataFrame) -> pd.DataFrame:
         pv = pd.concat([data_rows, total_rows], ignore_index=True)
     return pv
 
-def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    non_num = ['Style ID','Size','Color']
-    num_cols = [c for c in df.columns if c not in non_num]
-    sums = df[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
-    out = df.copy()
-    out['Grand Total'] = sums
-    return out
-
 def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
     out: List[Tuple[str, pd.DataFrame]] = []
     if df.empty or 'Style ID' not in df.columns:
         return out
     styles = df['Style ID'].dropna().astype(str).unique().tolist()
     for s in styles:
-        sub = df[df['Style ID']==s].copy()
+        sub = df[df['Style ID'] == s].copy()
         if sub.empty:
             continue
         if 'Quantity' in sub.columns:
@@ -238,7 +245,8 @@ def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
         ).reset_index()
         if {'Style ID','Size','Color'}.issubset(pv.columns):
             pv = pv.sort_values(['Style ID','Size','Color']).reset_index(drop=True)
-        pv = add_right_grand_total_column(pv)
+        pv = add_right_grand_total_column(pv)   # दाएँ ओर row-wise total
+        pv = add_bottom_total_row(pv, label_col='Style ID')  # सबसे नीचे कुल योग row
         out.append((s, pv))
     return out
 
@@ -268,11 +276,11 @@ def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
         ('FONTSIZE',(0,0),(-1,-1),8),
         ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.whitesmoke, colors.lightcyan]),
     ]))
-    last = len(data) - 1
-    if last >= 1:
+    # Highlight last row (Grand Total) with light-green if exists
+    if len(data) >= 2:
         t.setStyle(TableStyle([
-            ('BACKGROUND',(0,last),(-1,last), colors.HexColor('#E8F5E9')),
-            ('FONTNAME',(0,last),(-1,last),'Helvetica-Bold')
+            ('BACKGROUND',(0,len(data)-1),(-1,len(data)-1), colors.HexColor('#E8F5E9')),
+            ('FONTNAME',(0,len(data)-1),(-1,len(data)-1),'Helvetica-Bold')
         ]))
     elems.append(t)
     doc.build(elems)
@@ -280,7 +288,7 @@ def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
 
 # ---------------- App ----------------
 def main():
-    st.title('Order List Dashboard with Packet Id Blank Filter')
+    st.title('Order List Dashboard with Packet Id Blank Filter + Grand Total Row')
 
     with st.expander('Upload files'):
         uploads = st.file_uploader(
@@ -313,7 +321,6 @@ def main():
         return
 
     df.columns = df.columns.astype(str).str.strip()
-
     if 'SKU' not in df.columns:
         df['SKU'] = ''
     if 'Product Name' not in df.columns:
@@ -335,7 +342,6 @@ def main():
                     axis=1
                 )
 
-    # Packet Id Filter
     st.subheader('Packet Id Filter')
     if 'Packet Id' in df.columns:
         all_packets_raw = df['Packet Id'].fillna('').astype(str)
@@ -346,7 +352,6 @@ def main():
     else:
         st.warning('Packet Id कॉलम नहीं मिला।')
 
-    # Reason for Credit Entry Filter
     st.subheader('Reason for Credit Entry Filter')
     all_status = []
     if 'Reason for Credit Entry' in df.columns:
@@ -354,9 +359,10 @@ def main():
     sel_status = st.multiselect('Select Credit Entry Reasons', options=all_status, default=[])
     df_filtered = filter_by_status(df, sel_status) if all_status else df.copy()
 
-    # Tabs and outputs
     with st.spinner('Building pivots...'):
         pv_master = master_pivot(df_filtered)
+        pv_master = add_right_grand_total_column(pv_master)
+        pv_master = add_bottom_total_row(pv_master, label_col='Style ID')
         pv_styles = stylewise_pivots(df_filtered)
 
     tab1, tab2, tab3, tab4 = st.tabs(['Data', 'Master Pivot', 'Style-wise Pivots', 'Master List'])
@@ -383,17 +389,16 @@ def main():
         else:
             for s, pv in pv_styles:
                 st.markdown(f'### {s}')
-                pv_show = add_right_grand_total_column(pv)
-                st.dataframe(pv_show, use_container_width=True)
+                st.dataframe(pv, use_container_width=True)
                 c1, c2 = st.columns(2)
                 with c1:
-                    one_xlsx = to_excel_bytes({f'Pivot_{s}': pv_show})
+                    one_xlsx = to_excel_bytes({f'Pivot_{s}': pv})
                     st.download_button(f'Download Excel ({s})', data=one_xlsx,
                                        file_name=f'Pivot_{s}.xlsx',
                                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                        key=f'xl_{s}')
                 with c2:
-                    one_pdf = df_to_pdf_bytes(f'Style: {s}', pv_show)
+                    one_pdf = df_to_pdf_bytes(f'Style: {s}', pv)
                     st.download_button(f'Download PDF ({s})', data=one_pdf,
                                        file_name=f'Pivot_{s}.pdf', mime='application/pdf',
                                        key=f'pdf_{s}')
@@ -415,16 +420,15 @@ def main():
             st.download_button('Download Master List (PDF)', data=m_pdf,
                                file_name='Master_List.pdf', mime='application/pdf')
 
-    # All-in-one Excel
     sheets = {'Data_Filtered': df_filtered, 'Pivot_Master': pv_master}
     for s, pv in pv_styles:
-        sheets[f'Pivot_{s}'] = add_right_grand_total_column(pv)
+        sheets[f'Pivot_{s}'] = pv
     excel_bytes = to_excel_bytes(sheets)
     st.download_button('Download Excel (All Sheets)', data=excel_bytes,
                        file_name='All_Data_Pivots.xlsx',
                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
-    st.success('Completed: merge, Packet Id filter (with Blank), credit reasons filter, color/style extraction, pivots, and downloads ready.')
+    st.success('सभी Pivot में नीचे Grand Total Row (Excel+PDF), Packet Id ब्लैंक फिल्टर, Reason for Credit Entry फिल्टर पूरी तरह काम कर रहे हैं।')
 
 if __name__ == '__main__':
     main()
