@@ -38,26 +38,27 @@ def normalize(s: str) -> str:
 def key(s: str) -> str:
     return normalize(s).replace(' ', '')
 
-# --- Grand Total Append Helpers ---
+# --- Grand Total Helpers ---
 def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     non_num = ['Style ID','Size','Color']
     num_cols = [c for c in df.columns if c not in non_num]
-    sums = df[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
     out = df.copy()
-    out['Grand Total'] = sums
+    out[num_cols] = out[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+    out['Grand Total'] = out[num_cols].sum(axis=1)
     return out
 
 def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    # identify numeric columns safely
     num_cols = out.select_dtypes(include='number').columns.tolist()
     if not num_cols:
         possible_nums = [c for c in out.columns if c not in ['Style ID','Size','Color']]
+        out[possible_nums] = out[possible_nums].apply(pd.to_numeric, errors='coerce').fillna(0)
         num_cols = possible_nums
-        out[num_cols] = out[num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
     total_row = {c: '' for c in out.columns}
     if label_col in out.columns:
         total_row[label_col] = 'Grand Total'
@@ -65,6 +66,48 @@ def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.Da
         total_row[c] = out[c].sum()
     out = pd.concat([out, pd.DataFrame([total_row], columns=out.columns)], ignore_index=True)
     return out
+
+# --- Safe utilities: prevent errors on empty data ---
+def safe_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or df.shape[1] == 0:
+        return pd.DataFrame([{'Message': 'No data available'}])
+    return df
+
+def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+        for name, d in sheets.items():
+            dd = safe_df_for_display(d)
+            dd.to_excel(w, index=False, sheet_name=name[:31])
+    return buf.getvalue()
+
+def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
+    # always build a minimal table even if empty
+    dd = safe_df_for_display(df)
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18, leftMargin=18, topMargin=24, bottomMargin=24)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(name='CenteredH', parent=styles['Heading1'], alignment=1)
+    elems = [Paragraph(title, title_style), Spacer(1, 8)]
+    data = [dd.columns.tolist()] + dd.astype(str).values.tolist()
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0), colors.lightgrey),
+        ('GRID',(0,0),(-1,-1), 0.35, colors.grey),
+        ('ALIGN',(0,0),(-1,-1),'CENTER'),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('FONTSIZE',(0,0),(-1,-1),8),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.whitesmoke, colors.lightcyan]),
+    ]))
+    # Highlight last row (commonly Grand Total) if > 1 row
+    if len(data) >= 2:
+        t.setStyle(TableStyle([
+            ('BACKGROUND',(0,len(data)-1),(-1,len(data)-1), colors.HexColor('#E8F5E9')),
+            ('FONTNAME',(0,len(data)-1),(-1,len(data)-1),'Helvetica-Bold')
+        ]))
+    elems.append(t)
+    doc.build(elems)
+    return buf.getvalue()
 
 # ---------------- Style Inference ----------------
 def derive_style_id_default(row: pd.Series) -> str:
@@ -192,10 +235,7 @@ def filter_by_packetid(df: pd.DataFrame, packet_ids: List[str]) -> pd.DataFrame:
     mask_blank = series.astype(str).str.strip().eq('') | series.isna()
     selected = [x for x in packet_ids if x != 'Blank']
     mask_selected = series.astype(str).isin(selected) if selected else pd.Series(False, index=df.index)
-    if 'Blank' in packet_ids:
-        combined_mask = mask_selected | mask_blank
-    else:
-        combined_mask = mask_selected
+    combined_mask = mask_selected | mask_blank if 'Blank' in packet_ids else mask_selected
     return df[combined_mask].copy()
 
 # ---------------- Pivots ----------------
@@ -245,50 +285,14 @@ def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
         ).reset_index()
         if {'Style ID','Size','Color'}.issubset(pv.columns):
             pv = pv.sort_values(['Style ID','Size','Color']).reset_index(drop=True)
-        pv = add_right_grand_total_column(pv)   # दाएँ ओर row-wise total
-        pv = add_bottom_total_row(pv, label_col='Style ID')  # सबसे नीचे कुल योग row
+        pv = add_right_grand_total_column(pv)
+        pv = add_bottom_total_row(pv, label_col='Style ID')
         out.append((s, pv))
     return out
 
-# ---------------- Excel/PDF Utilities ----------------
-def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as w:
-        for name, d in sheets.items():
-            (d if isinstance(d, pd.DataFrame) else pd.DataFrame()).to_excel(
-                w, index=False, sheet_name=name[:31]
-            )
-    return buf.getvalue()
-
-def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18, leftMargin=18, topMargin=24, bottomMargin=24)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(name='CenteredH', parent=styles['Heading1'], alignment=1)
-    elems = [Paragraph(title, title_style), Spacer(1, 8)]
-    data = [df.columns.tolist()] + df.astype(str).values.tolist()
-    t = Table(data, repeatRows=1)
-    t.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0), colors.lightgrey),
-        ('GRID',(0,0),(-1,-1), 0.35, colors.grey),
-        ('ALIGN',(0,0),(-1,-1),'CENTER'),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('FONTSIZE',(0,0),(-1,-1),8),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.whitesmoke, colors.lightcyan]),
-    ]))
-    # Highlight last row (Grand Total) with light-green if exists
-    if len(data) >= 2:
-        t.setStyle(TableStyle([
-            ('BACKGROUND',(0,len(data)-1),(-1,len(data)-1), colors.HexColor('#E8F5E9')),
-            ('FONTNAME',(0,len(data)-1),(-1,len(data)-1),'Helvetica-Bold')
-        ]))
-    elems.append(t)
-    doc.build(elems)
-    return buf.getvalue()
-
 # ---------------- App ----------------
 def main():
-    st.title('Order List Dashboard with Packet Id Blank Filter + Grand Total Row')
+    st.title('Order List Dashboard (Blank Packet Id + Safe Filters + Grand Totals)')
 
     with st.expander('Upload files'):
         uploads = st.file_uploader(
@@ -342,22 +346,32 @@ def main():
                     axis=1
                 )
 
+    # Filters UI
     st.subheader('Packet Id Filter')
     if 'Packet Id' in df.columns:
         all_packets_raw = df['Packet Id'].fillna('').astype(str)
         non_blank = sorted([x for x in all_packets_raw.unique().tolist() if x.strip() != ''])
         packet_options = non_blank + ['Blank']
         sel_packets = st.multiselect('Packet Id चुनें (Blank सहित)', options=packet_options, default=[])
-        df = filter_by_packetid(df, sel_packets)
     else:
         st.warning('Packet Id कॉलम नहीं मिला।')
+        sel_packets = []
 
     st.subheader('Reason for Credit Entry Filter')
-    all_status = []
-    if 'Reason for Credit Entry' in df.columns:
-        all_status = sorted(df['Reason for Credit Entry'].dropna().astype(str).unique().tolist())
+    all_status = sorted(df['Reason for Credit Entry'].dropna().astype(str).unique().tolist()) if 'Reason for Credit Entry' in df.columns else []
     sel_status = st.multiselect('Select Credit Entry Reasons', options=all_status, default=[])
-    df_filtered = filter_by_status(df, sel_status) if all_status else df.copy()
+
+    # Gate: require both filters to proceed
+    filters_ready = bool(sel_packets) and bool(sel_status)
+    if not filters_ready:
+        st.warning('रिपोर्ट देखने से पहले कृपया दोनों फ़िल्टर चुनें: Packet Id और Reason for Credit Entry.')
+        with st.expander('मदद/Help'):
+            st.write('जब तक दोनों फ़िल्टर खाली हैं, डेटा सारांश और डाउनलोड रोके गए हैं ताकि कोई त्रुटि न दिखे। पहले Packet Id चुनें, फिर Reason चुनें.')
+        return
+
+    # Apply filters only when ready
+    df_filtered = filter_by_packetid(df, sel_packets)
+    df_filtered = filter_by_status(df_filtered, sel_status)
 
     with st.spinner('Building pivots...'):
         pv_master = master_pivot(df_filtered)
@@ -368,10 +382,10 @@ def main():
     tab1, tab2, tab3, tab4 = st.tabs(['Data', 'Master Pivot', 'Style-wise Pivots', 'Master List'])
 
     with tab1:
-        st.dataframe(df_filtered.head(2000), use_container_width=True)
+        st.dataframe(safe_df_for_display(df_filtered).head(2000), use_container_width=True)
 
     with tab2:
-        st.dataframe(pv_master, use_container_width=True)
+        st.dataframe(safe_df_for_display(pv_master), use_container_width=True)
         colA, colB = st.columns(2)
         with colA:
             mp_bytes = to_excel_bytes({'Pivot_Master': pv_master})
@@ -385,11 +399,11 @@ def main():
 
     with tab3:
         if not pv_styles:
-            st.info('No style-specific pivots available.')
+            st.info('No style-specific pivots available for selected filters.')
         else:
             for s, pv in pv_styles:
                 st.markdown(f'### {s}')
-                st.dataframe(pv, use_container_width=True)
+                st.dataframe(safe_df_for_display(pv), use_container_width=True)
                 c1, c2 = st.columns(2)
                 with c1:
                     one_xlsx = to_excel_bytes({f'Pivot_{s}': pv})
@@ -407,8 +421,8 @@ def main():
         st.markdown('#### Master Style List')
         cols = ['Style ID','Size','Color','Reason for Credit Entry','Quantity']
         cols = [c for c in cols if c in df_filtered.columns]
-        master_list = df_filtered[cols].copy()
-        st.dataframe(master_list, use_container_width=True, height=420)
+        master_list = df_filtered[cols] if cols else pd.DataFrame()
+        st.dataframe(safe_df_for_display(master_list), use_container_width=True, height=420)
         mcol1, mcol2 = st.columns(2)
         with mcol1:
             m_xlsx = to_excel_bytes({'Master_List': master_list})
@@ -420,6 +434,7 @@ def main():
             st.download_button('Download Master List (PDF)', data=m_pdf,
                                file_name='Master_List.pdf', mime='application/pdf')
 
+    # All-in-one Excel
     sheets = {'Data_Filtered': df_filtered, 'Pivot_Master': pv_master}
     for s, pv in pv_styles:
         sheets[f'Pivot_{s}'] = pv
@@ -428,7 +443,7 @@ def main():
                        file_name='All_Data_Pivots.xlsx',
                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
-    st.success('सभी Pivot में नीचे Grand Total Row (Excel+PDF), Packet Id ब्लैंक फिल्टर, Reason for Credit Entry फिल्टर पूरी तरह काम कर रहे हैं।')
+    st.success('तैयार: Blank Packet Id सपोर्ट, दोनों फ़िल्टर गेटिंग, Grand Total (right + bottom), और Excel/PDF सभी सुरक्षित रूप से तैयार हैं।')
 
 if __name__ == '__main__':
     main()
