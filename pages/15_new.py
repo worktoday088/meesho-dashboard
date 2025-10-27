@@ -1,9 +1,10 @@
-# old_updated_v3.py
-# 📦 Meesho Order Analysis Dashboard — Updated v3
-# Fixes: SKU group selection applied correctly, Shipped ₹ strictly sums 'Shipped' status,
-# Platform Recovery count & ₹, Blank status in dropdown, Status-cards Grand Total
+# old_updated_v4.py
+# 📦 Meesho Order Analysis Dashboard — Updated v4
+# Fixes: SKU group selection applied correctly (like new.py),
+# Shipping (₹) strictly sums 'Shipped' status, Platform Recovery count+₹,
+# Blank status option, Grand Total count card, single Excel/PDF downloads.
 # Date: 2025-10-27
-# Version: old_updated_v3
+# Version: old_updated_v4
 
 import os
 import re
@@ -34,13 +35,13 @@ try:
 except Exception:
     _kaleido_ok = False
 
-__VERSION__ = "Power By Rehan — updated_v3"
+__VERSION__ = "Power By Rehan — updated_v4"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
 st.caption(
-    "Features preserved + SKU Groups fix + Platform Recovery cards + Shipped ₹ strict sum + Grand Total"
+    "Preserved features + SKU Groups fixed + Shipping (₹) strict sum + Platform Recovery + Grand Total"
 )
 if not _kaleido_ok:
     st.warning("Colorful chart PDF के लिए 'kaleido' आवश्यक है → pip install kaleido")
@@ -129,9 +130,7 @@ def _date(val):
 st.sidebar.header("⚙️ Controls & Filters")
 st.sidebar.caption("Tip: use the SKU Grouping to create multi-keyword selections")
 
-# ensure session_state keys exist
-if 'filters' not in st.session_state:
-    st.session_state['filters'] = {}
+# ensure session_state keys
 if 'sku_groups' not in st.session_state:
     st.session_state['sku_groups'] = []
 
@@ -207,6 +206,7 @@ if not status_col:
     st.error("Status column not detected (e.g. 'Live Order Status').")
     st.stop()
 
+# parse date columns
 for c in [order_date_col, payment_date_col, dispatch_date_col]:
     if c and c in orders_df.columns:
         orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
@@ -266,18 +266,22 @@ with st.sidebar.expander("🎛️ Basic Filters", expanded=True):
         if st.session_state.get('sku_groups'):
             st.markdown("**Existing SKU Groups**")
             grp_labels = [f"{i+1}. {g['name']} ({len(g['skus'])})" for i,g in enumerate(st.session_state['sku_groups'])]
+            # use a session_state-backed multiselect so selection persists and is accessible later
             chosen_group_labels = st.multiselect("Select Groups to apply (their SKUs will be merged)", options=grp_labels, key='sku_group_multiselect')
-            # map chosen labels to group SKUs
-            selected_from_groups = []
-            for label in chosen_group_labels:
-                idx = int(label.split('.',1)[0]) - 1
-                if 0 <= idx < len(st.session_state['sku_groups']):
-                    selected_from_groups.extend(st.session_state['sku_groups'][idx]['skus'])
+            # manual selected SKUs (union behavior)
             select_all_live = st.checkbox("Include ALL live-search matches (if any)", value=True)
             manual_selected = [s for s in skus if sku_search_q.lower() in s.lower()] if (sku_search_q and select_all_live) else []
-            union_selected = sorted(list(set(selected_from_groups + manual_selected)))
+            # union of selected groups' SKUs and manual matches
+            selected_from_groups_local = []
+            for label in chosen_group_labels:
+                try:
+                    idx = int(label.split('.',1)[0]) - 1
+                    if 0 <= idx < len(st.session_state['sku_groups']):
+                        selected_from_groups_local.extend(st.session_state['sku_groups'][idx]['skus'])
+                except Exception:
+                    continue
+            union_selected = sorted(list(set(selected_from_groups_local + manual_selected)))
             selected_skus = st.multiselect("Selected SKU(s) (groups + manual)", options=skus, default=union_selected, key='selected_skus')
-            # Keep also raw chosen_group_labels in session_state (exists because key used)
         else:
             select_all_skus = st.checkbox("Select ALL matching SKUs", value=True)
             sku_opts = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else skus
@@ -320,6 +324,7 @@ with st.sidebar.expander("📅 Date Filters", expanded=True):
 
 # ---------------- APPLY FILTERS ----------------
 work = orders_df.copy()
+
 # date filters
 if order_date_col and date_range and len(date_range) == 2:
     s, e = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -328,28 +333,32 @@ if dispatch_date_col and dispatch_range and len(dispatch_range) == 2:
     s, e = pd.to_datetime(dispatch_range[0]), pd.to_datetime(dispatch_range[1])
     work = work[(work[dispatch_date_col] >= s) & (work[dispatch_date_col] <= e)]
 
-# Apply SKU group selection correctly:
-# Collect SKUs chosen via groups (session_state['sku_group_multiselect'] stores labels) and via manual selected_skus
+# SKU group selection — robust application:
+# 1) gather SKUs from chosen groups (stored in session_state['sku_group_multiselect'])
 selected_group_skus = []
-if 'sku_group_multiselect' in st.session_state and st.session_state.get('sku_group_multiselect'):
-    for label in st.session_state['sku_group_multiselect']:
-        try:
-            idx = int(label.split('.',1)[0]) - 1
-            if 0 <= idx < len(st.session_state['sku_groups']):
-                selected_group_skus.extend(st.session_state['sku_groups'][idx]['skus'])
-        except Exception:
-            continue
+chosen_labels = st.session_state.get('sku_group_multiselect', []) if 'sku_group_multiselect' in st.session_state else []
+for label in chosen_labels:
+    try:
+        idx = int(label.split('.',1)[0]) - 1
+        if 0 <= idx < len(st.session_state['sku_groups']):
+            selected_group_skus.extend(st.session_state['sku_groups'][idx]['skus'])
+    except Exception:
+        continue
 
-# selected_skus (from the explicit multiselect) may already include union; prefer explicit 'selected_skus' if present
+# 2) gather explicit selected_skus from multiselect widget (session state)
+explicit_selected_skus = st.session_state.get('selected_skus', []) if 'selected_skus' in st.session_state else []
+
+# 3) union (deduplicate) — but prefer explicit selection if provided
 final_selected_skus = []
+# include group skus first
 if selected_group_skus:
-    final_selected_skus.extend(selected_group_skus)
-if 'selected_skus' in st.session_state and st.session_state.get('selected_skus'):
-    # selected_skus may contain SKUs (strings) or be empty
-    final_selected_skus.extend([str(x) for x in st.session_state.get('selected_skus') if x is not None and str(x).strip() != ""])
+    final_selected_skus.extend([str(x) for x in selected_group_skus])
+# include explicit selected
+if explicit_selected_skus:
+    final_selected_skus.extend([str(x) for x in explicit_selected_skus])
 
-# de-duplicate
-final_selected_skus = sorted(list(dict.fromkeys(final_selected_skus)))
+# dedupe and keep non-empty
+final_selected_skus = sorted(list(dict.fromkeys([s for s in final_selected_skus if s is not None and str(s).strip() != ""])))
 
 if sku_col and final_selected_skus:
     work = work[work[sku_col].astype(str).isin(final_selected_skus)]
@@ -377,7 +386,7 @@ else:
     df_f = work[mask_sel].copy()
     applied_status = ", ".join(selected_statuses)
 
-# Ensure RTO special columns if possible
+# Ensure RTO columns if possible
 def _ensure_rto_cols(df: pd.DataFrame, status_col: str) -> pd.DataFrame:
     out = df.copy()
     need = ['Listing Price (Incl. taxes)', 'Total Sale Amount (Incl. Shipping & GST)']
@@ -434,16 +443,20 @@ status_colors = {
     'Shipped': '#1565c0',
     'RTO': '#8e24aa'
 }
+
 # counts per status on filtered df
 counts = {s: int(df_f[status_col].astype(str).str.upper().eq(s.upper()).sum()) for s in status_labels}
-# platform recovery count (blank status)
+
+# platform recovery (blank status) count
 blank_mask_full = (df_f[status_col].isna() | (df_f[status_col].astype(str).str.strip() == ""))
 platform_recovery_count = int(blank_mask_full.sum())
+
 filtered_total = df_f.shape[0]
 # grand total should equal filtered_total
 grand_total_count = filtered_total
 
-cols = st.columns(len(status_labels) + 2)  # extra one for platform recovery and one for grand total
+# render status cards + platform recovery + grand total
+cols = st.columns(len(status_labels) + 2)
 i = 0
 for label in status_labels:
     display_label = status_labels[label]
@@ -458,7 +471,7 @@ for label in status_labels:
     )
     i += 1
 
-# Platform Recovery Count card
+# Platform Recovery Count
 cols[i].markdown(
     f"""
     <div title="Blank/empty status rows counted as Platform Recovery" style='background-color:#37474f; padding:10px; border-radius:8px; text-align:center; color:white'>
@@ -470,18 +483,18 @@ cols[i].markdown(
 )
 i += 1
 
-# Grand Total Count card
+# Grand Total Count
 cols[i].markdown(
     f"""
     <div title="Grand Total of shown rows" style='background-color:#0d47a1; padding:10px; border-radius:8px; text-align:center; color:white'>
-        <div style="font-size:14px; margin-bottom:6px'>📊 Grand Total (Count)</div>
-        <div style="font-size:22px; font-weight:700'>{grand_total_count}</div>
+        <div style="font-size:14px; margin-bottom:6px">📊 Grand Total (Count)</div>
+        <div style="font-size:22px; font-weight:700">{grand_total_count}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------------- AMOUNT SUMMARY (Filtered) — with fixes ----------------
+# ---------------- AMOUNT SUMMARY (Filtered) ----------------
 st.subheader("₹ Amount Summary (Filtered — Status-wise)")
 if settle_amt_col and settle_amt_col in df_f.columns:
     df_f[settle_amt_col] = pd.to_numeric(df_f[settle_amt_col], errors='coerce').fillna(0)
@@ -497,10 +510,10 @@ u_exc = _sum_by_status(df_f, 'Exchange', settle_amt_col)
 u_can = _sum_by_status(df_f, 'Cancelled', settle_amt_col)
 u_ret = _sum_by_status(df_f, 'Return', settle_amt_col)
 
-# FIX: Shipped ₹ strictly from 'Shipped' status and using settle_amt_col only
+# FIX: Shipping ₹ strictly from 'Shipped' status and using settle_amt_col only
 u_ship = _sum_by_status(df_f, 'Shipped', settle_amt_col)
 
-# RTO amount (if precomputed)
+# RTO
 u_rto = 0.0
 if 'RTO Amount' in df_f.columns:
     u_rto = pd.to_numeric(df_f.loc[df_f[status_col].astype(str).str.upper().eq('RTO'), 'RTO Amount'], errors='coerce').fillna(0).sum()
@@ -519,13 +532,13 @@ abox = [
     ("Cancelled ₹", u_can, "#455a64", "❌"),
     ("Return ₹",    u_ret, "#b71c1c", "↩️"),
     ("RTO ₹",       u_rto, "#6a1b9a", "📪"),
-    ("Shipped ₹",   u_ship, "#0b3d91", "🚚"),
+    ("Shipping (₹)",   u_ship, "#0b3d91", "🚚"),
     ("Platform Recovery ₹", blank_amt, "#546e7a", "🔍"),
     ("Shipped With Total ₹", shipped_with_total, "#0b3d91", "🚚"),
     ("Total Amount ₹", u_total, "#0d47a1", "🧾"),
 ]
 
-# render amount cards in rows (split to avoid overflow)
+# render amount cards in two rows
 first_row = abox[:5]
 second_row = abox[5:]
 
@@ -561,7 +574,7 @@ if show_table:
 else:
     st.info("Filtered table hidden — Tick 'Show Filtered Table' to view.")
 
-# ---------------- CHARTS, PIVOTS, EXPORTS (preserved) ----------------
+# ---------------- CHARTS / PIVOTS / EXPORTS (preserved) ----------------
 _figs_for_pdf = []
 
 st.markdown("---")
@@ -720,7 +733,7 @@ with cpt2:
     st.plotly_chart(f4, use_container_width=True)
     _figs_for_pdf.append(("Return/Exchange % of Delivered", f4))
 
-# Profit section (preserved)
+# Profit section
 st.markdown("---")
 st.subheader("💹 Profit Calculation (Corrected)")
 profit_sum = _sum(df_f[profit_amt_col]) if profit_amt_col and profit_amt_col in df_f.columns else 0.0
@@ -734,7 +747,7 @@ pc2.markdown(_card_html("Return Loss (Σ)", return_loss_sum, bg="#b71c1c", icon=
 pc3.markdown(_card_html("Exchange Loss (Σ)", exchange_loss_sum, bg="#f57c00", icon="🔄"), unsafe_allow_html=True)
 pc4.markdown(_card_html("Net Profit", net_profit, bg="#0d47a1", icon="🧮"), unsafe_allow_html=True)
 
-# Ads cost analysis preserved (omitted here for brevity in reasoning - kept in code)
+# Ads cost analysis (preserved)
 st.markdown("---")
 st.subheader("📢 Ads Cost Analysis (STRICT — Deduction Duration + Total Ads Cost)")
 ads_table_for_export = None
@@ -799,7 +812,7 @@ with st.expander("Ads Cost Analysis", expanded=True):
             if show_ads_table:
                 st.dataframe(ads_table_for_export, use_container_width=True, height=350)
 
-# ---------------- EXCEL & PDF EXPORTS (preserved) ----------------
+# ---------------- EXCEL & PDF EXPORTS ----------------
 def _safe_filename(name: str, fallback: str) -> str:
     import os as _os
     name = (name or "").strip()
@@ -821,7 +834,7 @@ with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
         'Value': [_deliv, _ret, _exc, f"{ret_pct:.2f}%", f"{exc_pct:.2f}%"]
     }).to_excel(writer, index=False, sheet_name="Return-Exchange Summary")
     pd.DataFrame({
-        'Label': ['Delivered ₹','Exchange ₹','Cancelled ₹','Return ₹','RTO ₹','Shipped ₹','Platform Recovery ₹','Shipped With Total ₹','Total Amount ₹'],
+        'Label': ['Delivered ₹','Exchange ₹','Cancelled ₹','Return ₹','RTO ₹','Shipping ₹','Platform Recovery ₹','Shipped With Total ₹','Total Amount ₹'],
         'Value': [u_del, u_exc, u_can, u_ret, u_rto, u_ship, blank_amt, shipped_with_total, u_total]
     }).to_excel(writer, index=False, sheet_name="Amount Summary (Filtered)")
     pd.DataFrame({
@@ -838,12 +851,12 @@ with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
 st.download_button(
     "⬇️ Download Excel File",
     data=excel_buf.getvalue(),
-    file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_old_updated_v3.xlsx"),
+    file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_old_updated_v4.xlsx"),
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
 )
 
-# PDF helpers (kept same behavior as previous version)
+# ---------------- PDF EXPORT HELPERS ----------------
 def _make_summary_table_figure(supplier_name: str = "", supplier_id: str = ""):
     rows = [
         ["Delivered (cnt)", counts.get('Delivered', 0)],
@@ -860,7 +873,7 @@ def _make_summary_table_figure(supplier_name: str = "", supplier_id: str = ""):
         ["Cancelled ₹", u_can],
         ["Return ₹",    u_ret],
         ["RTO ₹",       u_rto],
-        ["Shipped ₹",   u_ship],
+        ["Shipping ₹",   u_ship],
         ["Platform Recovery ₹", blank_amt],
         ["Shipped With Total ₹", shipped_with_total],
         ["Total Amount ₹", u_total],
@@ -1019,21 +1032,20 @@ def _export_pdf_compact(figs_with_titles, file_name: str, supplier_name: str = "
 
 st.markdown("---")
 st.subheader("📄 Download PDF Reports (Color)")
-
 col_pdf1, col_pdf2 = st.columns(2)
 with col_pdf1:
     if _kaleido_ok:
         try:
             pdf_bytes_det = _export_pdf_detailed(
                 _figs_for_pdf,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v3.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v4.pdf"),
                 supplier_name=supplier_name_input,
                 supplier_id=supplier_id_auto
             )
             st.download_button(
                 label="⬇️ Download PDF (Detailed)",
                 data=pdf_bytes_det,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v3.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v4.pdf"),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -1047,14 +1059,14 @@ with col_pdf2:
         try:
             pdf_bytes_cmp = _export_pdf_compact(
                 _figs_for_pdf,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v3.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v4.pdf"),
                 supplier_name=supplier_name_input,
                 supplier_id=supplier_id_auto
             )
             st.download_button(
                 label="⬇️ Download PDF (Compact Grid)",
                 data=pdf_bytes_cmp,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v3.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v4.pdf"),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -1063,4 +1075,4 @@ with col_pdf2:
     else:
         st.info("Compact PDF के लिए kaleido ज़रूरी है।")
 
-st.success("✅ old_updated_v3 ready — SKU groups fixed, Shipped ₹ fixed, Platform Recovery & Grand Total added")
+st.success("✅ old_updated_v4 ready — SKU groups fixed, Shipping ₹ fixed, Platform Recovery & Grand Total added")
