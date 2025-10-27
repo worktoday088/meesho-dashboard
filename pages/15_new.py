@@ -1,8 +1,9 @@
-# old_updated.py
-# 📦 Meesho Order Analysis Dashboard — Updated (old_updated)
-# Merged fixes: SKU group behavior, Platform Recovery (count+₹), blank status select, shipped ₹ fix
+# old_updated_v3.py
+# 📦 Meesho Order Analysis Dashboard — Updated v3
+# Fixes: SKU group selection applied correctly, Shipped ₹ strictly sums 'Shipped' status,
+# Platform Recovery count & ₹, Blank status in dropdown, Status-cards Grand Total
 # Date: 2025-10-27
-# Version: old_updated_by_assistant
+# Version: old_updated_v3
 
 import os
 import re
@@ -33,13 +34,13 @@ try:
 except Exception:
     _kaleido_ok = False
 
-__VERSION__ = "Power By Rehan — updated"
+__VERSION__ = "Power By Rehan — updated_v3"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
 st.caption(
-    "Merged: original features + SKU Groups fix + Platform Recovery cards + Shipped ₹ fix"
+    "Features preserved + SKU Groups fix + Platform Recovery cards + Shipped ₹ strict sum + Grand Total"
 )
 if not _kaleido_ok:
     st.warning("Colorful chart PDF के लिए 'kaleido' आवश्यक है → pip install kaleido")
@@ -76,13 +77,11 @@ def _detect_col(df: pd.DataFrame, *keyword_groups):
 
 @st.cache_data(show_spinner=False)
 def _read_uploaded(file):
-    # read excel/csv robustly
     name = file.name.lower()
     if name.endswith('.csv'):
         return pd.read_csv(file), None
     xls = pd.ExcelFile(file)
     sheet_map = {s.lower(): s for s in xls.sheet_names}
-    # try common sheet names
     orders_sheet = sheet_map.get('order payments', xls.sheet_names[0])
     df_orders = pd.read_excel(xls, sheet_name=orders_sheet)
     df_ads = pd.read_excel(xls, sheet_name=sheet_map['ads cost']) if 'ads cost' in sheet_map else None
@@ -93,6 +92,10 @@ def _sum(series):
         return 0.0
     return pd.to_numeric(series, errors='coerce').fillna(0).sum()
 
+def html_escape(s):
+    import html
+    return html.escape(str(s)) if s is not None else ""
+
 def _card_html(title, value, bg="#0d47a1", icon="₹", tooltip=None):
     tt = f" title='{html_escape(tooltip)}' " if tooltip else ""
     return f"""
@@ -101,13 +104,19 @@ def _card_html(title, value, bg="#0d47a1", icon="₹", tooltip=None):
             <span style="font-weight:700">{icon}</span>
             <span style="font-weight:700">{title}</span>
         </div>
-        <div style="font-size:22px; font-weight:800; margin-top:6px">{format_value(value)}</div>
+        <div style="font-size:22px; font-weight:800; margin-top:6px">{_format_display(value)}</div>
     </div>
     """
 
-def html_escape(s):
-    import html
-    return html.escape(str(s)) if s is not None else ""
+def _format_display(v):
+    try:
+        if isinstance(v, (int, np.integer)):
+            return f"{v:,}"
+        if isinstance(v, (float, np.floating)):
+            return f"₹{v:,.2f}"
+        return str(v)
+    except Exception:
+        return str(v)
 
 def _date(val):
     try:
@@ -115,14 +124,6 @@ def _date(val):
         return "" if pd.isna(d) else str(d.date())
     except Exception:
         return str(val)
-
-def format_value(v):
-    try:
-        if isinstance(v, (int, np.integer)):
-            return f"{v:,}"
-        return f"₹{float(v):,.2f}"
-    except Exception:
-        return str(v)
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙️ Controls & Filters")
@@ -132,26 +133,21 @@ st.sidebar.caption("Tip: use the SKU Grouping to create multi-keyword selections
 if 'filters' not in st.session_state:
     st.session_state['filters'] = {}
 if 'sku_groups' not in st.session_state:
-    # sku_groups: list of dicts {'name', 'pattern', 'skus'}
     st.session_state['sku_groups'] = []
 
-# Supplier header
 supplier_name_input = st.sidebar.text_input(
     "🔹 Supplier / Client Name (header)",
     value="",
     help="Type a label so screenshots & PDFs clearly show whose data this is."
 )
 
-# File uploader
 up = st.sidebar.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
 if up is None:
     st.info("Please upload Excel/CSV (sheet 'Order Payments' expected).")
     st.stop()
 
-# try to auto detect supplier id from filename
 supplier_id_auto = extract_supplier_id_from_filename(up.name)
 
-# Banner
 def _render_supplier_banner(name: str, supplier_id: str):
     import html as _html
     name = (name or "").strip()
@@ -170,17 +166,13 @@ def _render_supplier_banner(name: str, supplier_id: str):
 
 _render_supplier_banner(supplier_name_input, supplier_id_auto)
 
-# Clear All Filters — improved reset
 if st.sidebar.button("🔄 Clear All Filters"):
-    # remove known keys and preserve upload
     keys_to_remove = [k for k in list(st.session_state.keys()) if k not in ['_rerun_counter', 'uploaded_files', 'sidebar_collapsed']]
-    # specifically clear known filter keys
     for k in ['status_multiselect', 'sku_search_q', 'selected_skus', 'selected_sizes', 'selected_states',
               'order_date_range', 'dispatch_date_range', 'ads_date_range', 'group_choice', 'dispatch_group_choice',
-              'sku_group_multiselect', 'sku_new_group_name', 'sku_group_multiselect', 'show_filtered_table', 'show_full_table']:
+              'sku_group_multiselect', 'sku_new_group_name', 'show_filtered_table', 'show_full_table']:
         if k in st.session_state:
             del st.session_state[k]
-    # clear sku groups but keep session key
     st.session_state['sku_groups'] = []
     st.rerun()
 
@@ -195,12 +187,11 @@ if orders_df is None or orders_df.empty:
     st.error("'Order Payments' data not found. Upload correct file.")
     st.stop()
 
-# normalize column names
 orders_df.columns = [str(c).strip() for c in orders_df.columns]
 if ads_df is not None:
     ads_df.columns = [str(c).strip() for c in ads_df.columns]
 
-# Detect columns (reuse original heuristics)
+# Detect columns
 status_col        = _detect_col(orders_df, ("live","order","status"), ("status",))
 order_date_col    = _detect_col(orders_df, ("order","date"))
 payment_date_col  = _detect_col(orders_df, ("payment","date"))
@@ -216,25 +207,22 @@ if not status_col:
     st.error("Status column not detected (e.g. 'Live Order Status').")
     st.stop()
 
-# parse date columns
 for c in [order_date_col, payment_date_col, dispatch_date_col]:
     if c and c in orders_df.columns:
         orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
 
 # ---------------- SIDEBAR FILTER CONTROLS ----------------
 with st.sidebar.expander("🎛️ Basic Filters", expanded=True):
-    # added blank option "" so Platform Recovery rows can be selected
+    # include blank option for Platform Recovery
     status_options = ['All', 'Delivered', 'Return', 'RTO', 'Exchange', 'Cancelled', 'Shipped', ""]
     selected_statuses = st.multiselect("Status", options=status_options, default=['All'], key='status_multiselect')
 
-    # SKU grouping controls (improved & aligned with new.py behavior)
+    # SKU grouping controls
     if sku_col and sku_col in orders_df.columns:
         st.markdown("**SKU Grouping** — type keyword and click ➕ Add Group")
         skus = sorted([str(x) for x in orders_df[sku_col].dropna().unique().tolist()])
 
-        # text input for searching SKU tokens (supports repeated digits/characters like '99' or '021')
         sku_search_q = st.text_input("Search SKU keyword (type part of SKU)", value="", key='sku_search_q')
-        # show matches (exact substring)
         if sku_search_q:
             matches = [s for s in skus if sku_search_q.lower() in s.lower()]
             st.caption(f"Matches: {len(matches)} — preview: {matches[:12]}")
@@ -256,7 +244,6 @@ with st.sidebar.expander("🎛️ Basic Filters", expanded=True):
                     else:
                         existing = [g['pattern'] for g in st.session_state['sku_groups']]
                         if pattern in existing:
-                            # update existing
                             for g in st.session_state['sku_groups']:
                                 if g['pattern'] == pattern:
                                     g['skus'] = matched_skus
@@ -273,24 +260,24 @@ with st.sidebar.expander("🎛️ Basic Filters", expanded=True):
                     del st.session_state['selected_skus']
                 st.rerun()
         with col_c:
-            st.write("")  # spacer
+            st.write("")
 
-        # show existing groups and allow selection to apply
+        # show existing groups and allow selection
         if st.session_state.get('sku_groups'):
             st.markdown("**Existing SKU Groups**")
             grp_labels = [f"{i+1}. {g['name']} ({len(g['skus'])})" for i,g in enumerate(st.session_state['sku_groups'])]
-            chosen = st.multiselect("Select Groups to apply (their SKUs will be merged)", options=grp_labels, key='sku_group_multiselect')
-            # map chosen to skus
+            chosen_group_labels = st.multiselect("Select Groups to apply (their SKUs will be merged)", options=grp_labels, key='sku_group_multiselect')
+            # map chosen labels to group SKUs
             selected_from_groups = []
-            for label in chosen:
+            for label in chosen_group_labels:
                 idx = int(label.split('.',1)[0]) - 1
                 if 0 <= idx < len(st.session_state['sku_groups']):
                     selected_from_groups.extend(st.session_state['sku_groups'][idx]['skus'])
-            # manual include of live-search matches
             select_all_live = st.checkbox("Include ALL live-search matches (if any)", value=True)
             manual_selected = [s for s in skus if sku_search_q.lower() in s.lower()] if (sku_search_q and select_all_live) else []
             union_selected = sorted(list(set(selected_from_groups + manual_selected)))
             selected_skus = st.multiselect("Selected SKU(s) (groups + manual)", options=skus, default=union_selected, key='selected_skus')
+            # Keep also raw chosen_group_labels in session_state (exists because key used)
         else:
             select_all_skus = st.checkbox("Select ALL matching SKUs", value=True)
             sku_opts = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else skus
@@ -340,21 +327,44 @@ if order_date_col and date_range and len(date_range) == 2:
 if dispatch_date_col and dispatch_range and len(dispatch_range) == 2:
     s, e = pd.to_datetime(dispatch_range[0]), pd.to_datetime(dispatch_range[1])
     work = work[(work[dispatch_date_col] >= s) & (work[dispatch_date_col] <= e)]
-# sku filter
-if sku_col and selected_skus:
-    work = work[work[sku_col].astype(str).isin([str(x) for x in selected_skus])]
+
+# Apply SKU group selection correctly:
+# Collect SKUs chosen via groups (session_state['sku_group_multiselect'] stores labels) and via manual selected_skus
+selected_group_skus = []
+if 'sku_group_multiselect' in st.session_state and st.session_state.get('sku_group_multiselect'):
+    for label in st.session_state['sku_group_multiselect']:
+        try:
+            idx = int(label.split('.',1)[0]) - 1
+            if 0 <= idx < len(st.session_state['sku_groups']):
+                selected_group_skus.extend(st.session_state['sku_groups'][idx]['skus'])
+        except Exception:
+            continue
+
+# selected_skus (from the explicit multiselect) may already include union; prefer explicit 'selected_skus' if present
+final_selected_skus = []
+if selected_group_skus:
+    final_selected_skus.extend(selected_group_skus)
+if 'selected_skus' in st.session_state and st.session_state.get('selected_skus'):
+    # selected_skus may contain SKUs (strings) or be empty
+    final_selected_skus.extend([str(x) for x in st.session_state.get('selected_skus') if x is not None and str(x).strip() != ""])
+
+# de-duplicate
+final_selected_skus = sorted(list(dict.fromkeys(final_selected_skus)))
+
+if sku_col and final_selected_skus:
+    work = work[work[sku_col].astype(str).isin(final_selected_skus)]
+
 # size/state filters
 if size_col and selected_sizes:
     work = work[work[size_col].astype(str).isin([str(x) for x in selected_sizes])]
 if state_col and selected_states:
     work = work[work[state_col].astype(str).isin([str(x) for x in selected_states])]
 
-# status filter — improved to support blank "" selection for Platform Recovery
+# status filter — include blank logic
 if 'All' in selected_statuses:
     df_f = work.copy()
     applied_status = 'All'
 else:
-    # build masks: include uppercase matches, and include blank rows if "" selected
     include_blank = "" in selected_statuses
     nonblank_selected = [s for s in selected_statuses if s != ""]
     sel_up = [s.upper() for s in nonblank_selected]
@@ -363,12 +373,11 @@ else:
     elif sel_up:
         mask_sel = work[status_col].astype(str).str.upper().isin(sel_up)
     else:
-        # only blank selected
         mask_sel = (work[status_col].isna() | (work[status_col].astype(str).str.strip() == ""))
     df_f = work[mask_sel].copy()
     applied_status = ", ".join(selected_statuses)
 
-# Ensure RTO special columns if possible (reuse v11 logic)
+# Ensure RTO special columns if possible
 def _ensure_rto_cols(df: pd.DataFrame, status_col: str) -> pd.DataFrame:
     out = df.copy()
     need = ['Listing Price (Incl. taxes)', 'Total Sale Amount (Incl. Shipping & GST)']
@@ -397,8 +406,8 @@ if order_date_col and date_range:
     cap += f" | **OrderDate = {_date(date_range[0])} → {_date(date_range[1])}**"
 if dispatch_date_col and dispatch_range:
     cap += f" | **DispatchDate = {_date(dispatch_range[0])} → {_date(dispatch_range[1])}**"
-if sku_col and selected_skus is not None:
-    cap += f" | **SKUs = {len(selected_skus)}**"
+if final_selected_skus:
+    cap += f" | **SKUs = {len(final_selected_skus)}**"
 if size_col and selected_sizes is not None:
     cap += f" | **Sizes = {len(selected_sizes)}**"
 if state_col and selected_states is not None:
@@ -408,7 +417,7 @@ if (supplier_name_input or supplier_id_auto):
     cap += f" | **Supplier = {(supplier_name_input or supplier_id_auto)}**"
 st.caption(cap)
 
-# ---------------- TOP STATUS CARDS (existing v11 style) ----------------
+# ---------------- TOP STATUS CARDS ----------------
 status_labels = {
     'Delivered': '✅ Delivered',
     'Return': '↩️ Return',
@@ -427,9 +436,14 @@ status_colors = {
 }
 # counts per status on filtered df
 counts = {s: int(df_f[status_col].astype(str).str.upper().eq(s.upper()).sum()) for s in status_labels}
+# platform recovery count (blank status)
+blank_mask_full = (df_f[status_col].isna() | (df_f[status_col].astype(str).str.strip() == ""))
+platform_recovery_count = int(blank_mask_full.sum())
 filtered_total = df_f.shape[0]
+# grand total should equal filtered_total
+grand_total_count = filtered_total
 
-cols = st.columns(len(status_labels) + 1)
+cols = st.columns(len(status_labels) + 2)  # extra one for platform recovery and one for grand total
 i = 0
 for label in status_labels:
     display_label = status_labels[label]
@@ -444,20 +458,30 @@ for label in status_labels:
     )
     i += 1
 
-# Platform Recovery count (blank status rows)
-blank_mask_full = (df_f[status_col].isna() | (df_f[status_col].astype(str).str.strip() == ""))
-platform_recovery_count = int(blank_mask_full.sum())
-cols[-1].markdown(
+# Platform Recovery Count card
+cols[i].markdown(
     f"""
-    <div title="इन सभी blank/empty status orders को Platform Recovery मानकर काउंट किया गया है" style='background-color:#37474f; padding:10px; border-radius:8px; text-align:center; color:white'>
+    <div title="Blank/empty status rows counted as Platform Recovery" style='background-color:#37474f; padding:10px; border-radius:8px; text-align:center; color:white'>
         <div style="font-size:14px; margin-bottom:6px">📦 Platform Recovery (Count)</div>
         <div style="font-size:22px; font-weight:700">{platform_recovery_count}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
+i += 1
 
-# ---------------- AMOUNT SUMMARY (Filtered) — keep original calculations but fix shipped & add platform recovery amount ----------------
+# Grand Total Count card
+cols[i].markdown(
+    f"""
+    <div title="Grand Total of shown rows" style='background-color:#0d47a1; padding:10px; border-radius:8px; text-align:center; color:white'>
+        <div style="font-size:14px; margin-bottom:6px'>📊 Grand Total (Count)</div>
+        <div style="font-size:22px; font-weight:700'>{grand_total_count}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------------- AMOUNT SUMMARY (Filtered) — with fixes ----------------
 st.subheader("₹ Amount Summary (Filtered — Status-wise)")
 if settle_amt_col and settle_amt_col in df_f.columns:
     df_f[settle_amt_col] = pd.to_numeric(df_f[settle_amt_col], errors='coerce').fillna(0)
@@ -468,33 +492,23 @@ def _sum_by_status(df, status_name, col):
     mask = df[status_col].astype(str).str.upper().eq(status_name.upper())
     return pd.to_numeric(df.loc[mask, col], errors='coerce').fillna(0).sum()
 
-# use consistent sumbystatus logic similar to new.py
 u_del = _sum_by_status(df_f, 'Delivered', settle_amt_col)
 u_exc = _sum_by_status(df_f, 'Exchange', settle_amt_col)
 u_can = _sum_by_status(df_f, 'Cancelled', settle_amt_col)
 u_ret = _sum_by_status(df_f, 'Return', settle_amt_col)
 
-# fix shipped calculation — ensure it's sum of settle_amt for status 'Shipped'
+# FIX: Shipped ₹ strictly from 'Shipped' status and using settle_amt_col only
 u_ship = _sum_by_status(df_f, 'Shipped', settle_amt_col)
-# fallback: if no explicit 'Shipped' status, try 'Shipping' column name if present
-if u_ship == 0 and 'Shipping' in df_f.columns:
-    try:
-        u_ship = pd.to_numeric(df_f.loc[df_f[status_col].astype(str).str.upper().eq('SHIPPED'), 'Shipping'], errors='coerce').fillna(0).sum()
-    except Exception:
-        pass
 
-# RTO special column (if exists)
+# RTO amount (if precomputed)
 u_rto = 0.0
 if 'RTO Amount' in df_f.columns:
-    u_rto = pd.to_numeric(
-        df_f.loc[df_f[status_col].astype(str).str.upper().eq('RTO'), 'RTO Amount'], errors='coerce'
-    ).fillna(0).sum()
+    u_rto = pd.to_numeric(df_f.loc[df_f[status_col].astype(str).str.upper().eq('RTO'), 'RTO Amount'], errors='coerce').fillna(0).sum()
 
-# Platform Recovery amount (sum of settlement amt for blank status rows)
+# Platform Recovery amount: sum of settlement amount for blank status rows
 blank_amt = pd.to_numeric(df_f.loc[blank_mask_full, settle_amt_col], errors='coerce').fillna(0).sum() if settle_amt_col in df_f.columns else 0.0
 
-# Grand totals: ensure consistent with new.py approach
-# total amount as sum of individual status amounts + platform recovery amount
+# totals
 u_total = (u_del + u_exc + u_can) - abs(u_ret)
 shipped_with_total = (u_del + u_can + u_ship) - (abs(u_ret) + abs(u_exc))
 shipped_with_tooltip = "Delivered + Cancelled + Shipped - (Return + Exchange)"
@@ -507,14 +521,13 @@ abox = [
     ("RTO ₹",       u_rto, "#6a1b9a", "📪"),
     ("Shipped ₹",   u_ship, "#0b3d91", "🚚"),
     ("Platform Recovery ₹", blank_amt, "#546e7a", "🔍"),
-    ("Shipped With Total ₹", shipped_with_total, "#0b3d91", "🚚",),
+    ("Shipped With Total ₹", shipped_with_total, "#0b3d91", "🚚"),
     ("Total Amount ₹", u_total, "#0d47a1", "🧾"),
 ]
 
-# render amount cards (limit columns per row to avoid overlapping)
-# decide layout: show first 5 in one row, then rest
+# render amount cards in rows (split to avoid overflow)
 first_row = abox[:5]
-second_row = abox[5:9]
+second_row = abox[5:]
 
 cc = st.columns(len(first_row))
 for i, (label, val, color, icon) in enumerate(first_row):
@@ -548,12 +561,11 @@ if show_table:
 else:
     st.info("Filtered table hidden — Tick 'Show Filtered Table' to view.")
 
-# ---------------- CHARTS (with toggle) ----------------
-_figs_for_pdf = []  # collect (title, figure)
+# ---------------- CHARTS, PIVOTS, EXPORTS (preserved) ----------------
+_figs_for_pdf = []
 
 st.markdown("---")
-
-# 1) Live Order Status Count
+# Live Order Status Count
 st.subheader("1️⃣ Live Order Status Count (Filtered)")
 chart_type_status = st.radio("Chart Type (Status)", ["Bar", "Line"], horizontal=True, key="chart_status_toggle")
 status_df = df_f[status_col].fillna("BLANK").value_counts().reset_index()
@@ -570,7 +582,7 @@ else:
     st.plotly_chart(f1, use_container_width=True)
     _figs_for_pdf.append(("Live Order Status Count", f1))
 
-# 2) Orders by Order Date
+# Orders by Date
 st.markdown("---")
 st.subheader("2️⃣ Orders by Date (Order Date, Filtered)")
 if order_date_col:
@@ -597,7 +609,7 @@ if order_date_col:
 else:
     st.info("'Order Date' जैसा कॉलम detect नहीं हुआ।")
 
-# 3) Orders by Dispatch Date
+# Dispatch Date chart
 if dispatch_date_col:
     st.subheader("2️⃣🅰️ Orders by Dispatch Date (Filtered)")
     df_f['__disp_dt'] = pd.to_datetime(df_f[dispatch_date_col], errors='coerce')
@@ -621,7 +633,7 @@ if dispatch_date_col:
         st.plotly_chart(f2a, use_container_width=True)
         _figs_for_pdf.append(("Orders by Dispatch Date", f2a))
 
-# 4) Payments Received by Date
+# Payments Received by Date
 st.markdown("---")
 st.subheader("3️⃣ Payments Received by Date (Filtered)")
 if payment_date_col and settle_amt_col and settle_amt_col in df_f.columns:
@@ -649,7 +661,7 @@ if payment_date_col and settle_amt_col and settle_amt_col in df_f.columns:
 else:
     st.info("'Payment Date' या 'Final Settlement Amount' कॉलम detect नहीं हुआ।")
 
-# 4) Return & Exchange % of Delivered — as CARDS + Pivot + Chart toggle
+# Return & Exchange % of Delivered
 st.markdown("---")
 st.subheader("4️⃣ Return & Exchange % of Delivered (Filtered)")
 _deliv = int(status_df[status_df['Status'].str.upper()== 'DELIVERED']['Count'].sum()) if not status_df.empty else 0
@@ -684,7 +696,6 @@ c3.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# pivot + chart toggle
 pivot_df = pd.DataFrame({
     'Metric': ['Delivered', 'Return', 'Exchange', 'Return % of Delivered', 'Exchange % of Delivered'],
     'Value':  [_deliv, _ret, _exc, round(ret_pct, 2), round(exc_pct, 2)]
@@ -709,11 +720,11 @@ with cpt2:
     st.plotly_chart(f4, use_container_width=True)
     _figs_for_pdf.append(("Return/Exchange % of Delivered", f4))
 
-# ---------------- PROFIT SECTION (from original v11) ----------------
+# Profit section (preserved)
 st.markdown("---")
 st.subheader("💹 Profit Calculation (Corrected)")
 profit_sum = _sum(df_f[profit_amt_col]) if profit_amt_col and profit_amt_col in df_f.columns else 0.0
-return_loss_sum = abs(u_ret)  # returns treated as loss (using amount earlier)
+return_loss_sum = abs(u_ret)
 exchange_loss_sum = _sum(df_f[exchange_loss_col]) if exchange_loss_col and exchange_loss_col in df_f.columns else 0.0
 net_profit = profit_sum - (return_loss_sum + abs(exchange_loss_sum))
 
@@ -723,11 +734,10 @@ pc2.markdown(_card_html("Return Loss (Σ)", return_loss_sum, bg="#b71c1c", icon=
 pc3.markdown(_card_html("Exchange Loss (Σ)", exchange_loss_sum, bg="#f57c00", icon="🔄"), unsafe_allow_html=True)
 pc4.markdown(_card_html("Net Profit", net_profit, bg="#0d47a1", icon="🧮"), unsafe_allow_html=True)
 
-# ---------------- ADS COST ANALYSIS (existing logic retained + fixed) ----------------
+# Ads cost analysis preserved (omitted here for brevity in reasoning - kept in code)
 st.markdown("---")
 st.subheader("📢 Ads Cost Analysis (STRICT — Deduction Duration + Total Ads Cost)")
 ads_table_for_export = None
-
 with st.expander("Ads Cost Analysis", expanded=True):
     if ads_df is None or ads_df.empty:
         st.info("'Ads Cost' sheet नहीं मिली।")
@@ -741,38 +751,21 @@ with st.expander("Ads Cost Analysis", expanded=True):
         if miss:
             st.error("इन columns की आवश्यकता है: " + ", ".join(miss))
         else:
-            # Date conversion
-            ads_df['Deduction Duration'] = pd.to_datetime(
-                ads_df['Deduction Duration'], errors='coerce'
-            ).dt.date
-
-            # Date range filter
+            ads_df['Deduction Duration'] = pd.to_datetime(ads_df['Deduction Duration'], errors='coerce').dt.date
             dmin, dmax = ads_df['Deduction Duration'].min(), ads_df['Deduction Duration'].max()
-            rng = st.date_input(
-                "Deduction Duration — Date Range",
-                value=[dmin, dmax],
-                key='ads_date_range'
-            ) if pd.notna(dmin) and pd.notna(dmax) else None
+            rng = st.date_input("Deduction Duration — Date Range", value=[dmin, dmax], key='ads_date_range') if pd.notna(dmin) and pd.notna(dmax) else None
 
             if rng and len(rng) == 2:
                 d0, d1 = rng
-                ads_view = ads_df[
-                    (ads_df['Deduction Duration'] >= d0) & (ads_df['Deduction Duration'] <= d1)
-                ].copy()
+                ads_view = ads_df[(ads_df['Deduction Duration'] >= d0) & (ads_df['Deduction Duration'] <= d1)].copy()
             else:
                 ads_view = ads_df.copy()
 
-            # Orders per date (if order date available)
             orders_dates = None
             if order_date_col and order_date_col in orders_df.columns:
-                orders_dates = pd.to_datetime(
-                    orders_df[order_date_col], errors='coerce'
-                ).dt.date
+                orders_dates = pd.to_datetime(orders_df[order_date_col], errors='coerce').dt.date
 
-            # Calculate per-order cost
-            ads_view['Total Ads Cost'] = pd.to_numeric(
-                ads_view['Total Ads Cost'], errors='coerce'
-            ).fillna(0)
+            ads_view['Total Ads Cost'] = pd.to_numeric(ads_view['Total Ads Cost'], errors='coerce').fillna(0)
 
             def orders_count_for_date(dt):
                 if orders_dates is None:
@@ -781,57 +774,32 @@ with st.expander("Ads Cost Analysis", expanded=True):
 
             ads_view['Orders Count'] = ads_view['Deduction Duration'].apply(orders_count_for_date)
             ads_view['Per Order Cost'] = ads_view.apply(
-                lambda r: (r['Total Ads Cost'] / r['Orders Count'])
-                          if r['Orders Count'] and r['Orders Count'] > 0 else 0.0,
+                lambda r: (r['Total Ads Cost'] / r['Orders Count']) if r['Orders Count'] and r['Orders Count'] > 0 else 0.0,
                 axis=1
             )
 
-            # Total cost card
             ads_sum = ads_view['Total Ads Cost'].sum()
-            st.markdown(
-                _card_html("Total Ads Cost (Σ)", ads_sum, bg="#4a148c", icon="📣"),
-                unsafe_allow_html=True
-            )
+            st.markdown(_card_html("Total Ads Cost (Σ)", ads_sum, bg="#4a148c", icon="📣"), unsafe_allow_html=True)
 
-            # Chart
             if not ads_view.empty:
                 gads = ads_view.groupby('Deduction Duration', as_index=False)['Total Ads Cost'].sum().sort_values('Deduction Duration')
-
-                chart_type_ads = st.radio(
-                    "Chart Type (Ads)", ["Bar", "Line"], horizontal=True, key="chart_ads_toggle"
-                )
-
+                chart_type_ads = st.radio("Chart Type (Ads)", ["Bar", "Line"], horizontal=True, key="chart_ads_toggle")
                 if chart_type_ads == "Bar":
-                    fads = px.bar(
-                        gads,
-                        x='Deduction Duration',
-                        y='Total Ads Cost',
-                        text='Total Ads Cost',
-                        title="Ads Cost Over Time"
-                    )
+                    fads = px.bar(gads, x='Deduction Duration', y='Total Ads Cost', text='Total Ads Cost', title="Ads Cost Over Time")
                     fads.update_traces(textposition="outside")
                 else:
-                    fads = px.line(
-                        gads,
-                        x='Deduction Duration',
-                        y='Total Ads Cost',
-                        markers=True,
-                        title="Ads Cost Over Time"
-                    )
-
+                    fads = px.line(gads, x='Deduction Duration', y='Total Ads Cost', markers=True, title="Ads Cost Over Time")
                 fads.update_layout(height=480)
                 st.plotly_chart(fads, use_container_width=True)
                 _figs_for_pdf.append(("Ads Cost Over Time", fads))
 
-            # Table
             ads_show_cols = ['Deduction Duration', 'Total Ads Cost', 'Orders Count', 'Per Order Cost']
             ads_table_for_export = ads_view[ads_show_cols].sort_values('Deduction Duration', ascending=False)
-
             show_ads_table = st.checkbox("Show Ads Cost Table", value=True)
             if show_ads_table:
                 st.dataframe(ads_table_for_export, use_container_width=True, height=350)
 
-# ---------------- SAFE FILENAME HELPER ----------------
+# ---------------- EXCEL & PDF EXPORTS (preserved) ----------------
 def _safe_filename(name: str, fallback: str) -> str:
     import os as _os
     name = (name or "").strip()
@@ -841,7 +809,6 @@ def _safe_filename(name: str, fallback: str) -> str:
     base, ext = _os.path.splitext(fallback)
     return f"{base}__{safe}{ext}"
 
-# ---------------- EXCEL EXPORT ----------------
 st.markdown("---")
 st.subheader("📥 Download Excel Summary")
 excel_buf = BytesIO()
@@ -865,19 +832,18 @@ with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
         ads_table_for_export.to_excel(writer, index=False, sheet_name="Ads Cost Per Day")
     if ads_df is not None and not ads_df.empty:
         ads_df.to_excel(writer, index=False, sheet_name="Ads Cost Raw")
-    # metadata sheet
     meta = pd.DataFrame([[supplier_name_input or "", supplier_id_auto or "", datetime.now().strftime("%Y-%m-%d %H:%M:%S")]], columns=["Supplier Name","Supplier ID","Generated"])
     meta.to_excel(writer, index=False, sheet_name="Meta")
 
 st.download_button(
     "⬇️ Download Excel File",
     data=excel_buf.getvalue(),
-    file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_old_updated.xlsx"),
+    file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_old_updated_v3.xlsx"),
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
 )
 
-# ---------------- PDF EXPORT HELPERS ----------------
+# PDF helpers (kept same behavior as previous version)
 def _make_summary_table_figure(supplier_name: str = "", supplier_id: str = ""):
     rows = [
         ["Delivered (cnt)", counts.get('Delivered', 0)],
@@ -939,12 +905,10 @@ def _export_pdf_detailed(figs_with_titles, file_name: str, supplier_name: str = 
     out_pdf_path = os.path.join(tmpdir, file_name)
 
     with PdfPages(out_pdf_path) as pdf:
-        # summary
         fig_summary = _make_summary_table_figure(supplier_name, supplier_id)
         pdf.savefig(fig_summary, bbox_inches='tight')
         plt.close(fig_summary)
 
-        # Ads table page (if exists)
         if ads_table_for_export is not None and not ads_table_for_export.empty:
             try:
                 fig_ads, ax_ads = plt.subplots(figsize=(11.69, 8.27))
@@ -962,7 +926,6 @@ def _export_pdf_detailed(figs_with_titles, file_name: str, supplier_name: str = 
             except Exception:
                 pass
 
-        # each plotly fig -> png -> page
         for (title, fig) in figs_with_titles:
             try:
                 buf = BytesIO()
@@ -1001,14 +964,12 @@ def _export_pdf_compact(figs_with_titles, file_name: str, supplier_name: str = "
     tmpdir = tempfile.mkdtemp(prefix="meesho_oldupd_cmp_")
     png_paths = []
 
-    # summary table PNG
     fig_sum = _make_summary_table_figure(supplier_name, supplier_id)
     table_png = os.path.join(tmpdir, "summary_table.png")
     fig_sum.savefig(table_png, dpi=240, bbox_inches='tight')
     plt.close(fig_sum)
     png_paths.append(("Summary", table_png))
 
-    # convert each plotly fig to png
     for (title, fig) in figs_with_titles:
         try:
             p = os.path.join(tmpdir, f"fig_{abs(hash(title))}.png")
@@ -1056,7 +1017,6 @@ def _export_pdf_compact(figs_with_titles, file_name: str, supplier_name: str = "
     with open(out_pdf_path, 'rb') as f:
         return f.read()
 
-# ---------------- PDF BUTTONS ----------------
 st.markdown("---")
 st.subheader("📄 Download PDF Reports (Color)")
 
@@ -1066,14 +1026,14 @@ with col_pdf1:
         try:
             pdf_bytes_det = _export_pdf_detailed(
                 _figs_for_pdf,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v3.pdf"),
                 supplier_name=supplier_name_input,
                 supplier_id=supplier_id_auto
             )
             st.download_button(
                 label="⬇️ Download PDF (Detailed)",
                 data=pdf_bytes_det,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Detailed_old_updated_v3.pdf"),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -1087,14 +1047,14 @@ with col_pdf2:
         try:
             pdf_bytes_cmp = _export_pdf_compact(
                 _figs_for_pdf,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v3.pdf"),
                 supplier_name=supplier_name_input,
                 supplier_id=supplier_id_auto
             )
             st.download_button(
                 label="⬇️ Download PDF (Compact Grid)",
                 data=pdf_bytes_cmp,
-                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated.pdf"),
+                file_name=_safe_filename(supplier_name_input or supplier_id_auto, "Meesho_Report_Compact_old_updated_v3.pdf"),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -1103,4 +1063,4 @@ with col_pdf2:
     else:
         st.info("Compact PDF के लिए kaleido ज़रूरी है।")
 
-st.success("✅ old_updated ready — merged fixes + preserved original features")
+st.success("✅ old_updated_v3 ready — SKU groups fixed, Shipped ₹ fixed, Platform Recovery & Grand Total added")
