@@ -74,7 +74,6 @@ if uploaded_files:
         ).dt.date
 
     st.sidebar.header("Filters")
-
     # Date filter
     if "Return Created Date" in df_all.columns:
         all_dates = sorted(str(x) for x in df_all["Return Created Date"].dropna().unique())
@@ -108,13 +107,33 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # ADVANCED SKU FILTER SYSTEM
+    # ---- ADVANCED SKU FILTER SYSTEM ----
     if "SKU" in df_all.columns:
         all_skus = sorted(str(x) for x in df_all["SKU"].dropna().unique())
+        st.sidebar.write("SKU Filters:")
         sku_search = st.sidebar.text_input("Search SKU keyword", "")
         filtered_skus = [s for s in all_skus if sku_search.lower() in s.lower()] if sku_search else all_skus
-        select_all_sku = st.sidebar.checkbox("Select all SKUs", True)
-        selected_skus = filtered_skus if select_all_sku else st.sidebar.multiselect("Select SKU(s)", filtered_skus, default=filtered_skus)
+        sku_col1, sku_col2 = st.sidebar.columns(2)
+        if sku_col1.button("Select All SKUs"):
+            st.session_state["selected_skus"] = filtered_skus
+        if sku_col2.button("Clear All SKUs"):
+            st.session_state["selected_skus"] = []
+        if "selected_skus" not in st.session_state:
+            st.session_state["selected_skus"] = filtered_skus
+        selected_skus = st.sidebar.multiselect(
+            "Select SKUs",
+            filtered_skus,
+            default=st.session_state["selected_skus"],
+            key="selected_skus"
+        )
+        sku_keyword = st.sidebar.text_input("SKU keyword (auto-select, e.g. FRUIT)", key="sku_keyword")
+        if st.sidebar.button("Auto-select SKUs by keyword"):
+            if sku_keyword:
+                auto_skus = [s for s in filtered_skus if sku_keyword.lower() in str(s).lower()]
+                if auto_skus:
+                    st.session_state["selected_skus"] = auto_skus
+                else:
+                    st.warning("No SKUs found for this keyword.")
     else:
         selected_skus = []
 
@@ -128,7 +147,6 @@ if uploaded_files:
     if "SKU" in df_filtered.columns and selected_skus:
         df_filtered = df_filtered[df_filtered["SKU"].isin(selected_skus)]
 
-    # Top KPI Boxes
     courier_rto_count = 0
     customer_return_count = 0
     if "Type of Return" in df_filtered.columns:
