@@ -367,11 +367,14 @@ if uploaded_files:
         reason_pivot = add_grand_totals(reason_pivot)
         st.dataframe(reason_pivot, use_container_width=True)
 
-    # ----------------- Style Group Reason Summary by keyword (VERTICAL) -----------------
+    # -------- Style Group Reason Summary by keyword (VERTICAL + GRAND TOTAL + PDF) --------
     st.subheader("Style Group Reason Summary by keyword")
     stylegroup_key = st.text_input(
         "Enter Style Group keyword (e.g. POCKET TIE)"
     )
+
+    groupsummary_with_total = None
+    groupsummary_pivot = None
 
     if stylegroup_key and "SKU" in df_filtered.columns:
         temp_df = df_filtered.copy()
@@ -398,14 +401,46 @@ if uploaded_files:
                 .reset_index(name="Return Count")
             )
 
+            # Grand Total row
             total_count = groupsummary["Return Count"].sum()
-            st.markdown(f"**Grand Total: {total_count}**")
+            grand_total_row = pd.DataFrame({
+                "Style Group": ["Grand Total"],
+                "Detailed Return Reason": [""],
+                "Return Count": [int(total_count)]
+            })
+
+            groupsummary_with_total = pd.concat(
+                [
+                    groupsummary.sort_values(by="Return Count", ascending=False),
+                    grand_total_row
+                ],
+                ignore_index=True
+            )
 
             st.dataframe(
-                groupsummary.sort_values(
-                    by="Return Count", ascending=False
-                ),
+                groupsummary_with_total,
                 use_container_width=True
+            )
+
+            # PDF के लिए pivot (reason vertical index)
+            groupsummary_pivot = groupsummary_with_total.pivot_table(
+                index="Detailed Return Reason",
+                columns="Style Group",
+                values="Return Count",
+                fill_value=0,
+                aggfunc="sum"
+            )
+
+            pdf_stylegroup = pivot_to_pdf(
+                groupsummary_pivot,
+                title=f"Style Group Reason Summary - {stylegroup_key}"
+            )
+
+            st.download_button(
+                "Download Style Group Summary PDF",
+                pdf_stylegroup,
+                f"style_group_summary_{stylegroup_key}.pdf",
+                "application/pdf"
             )
         else:
             st.info("No SKUs found matching this style keyword.")
@@ -446,12 +481,13 @@ if uploaded_files:
         if "reason_pivot" in locals():
             reason_pivot.to_excel(writer, sheet_name="Return Reason Summary")
 
-        # Style group vertical वाली summary अलग sheet पर:
-        if "groupsummary" in locals():
-            groupsummary.to_excel(writer, sheet_name="Style Group Summary", index=False)
-
         if "combined_pivot" in locals():
             combined_pivot.to_excel(writer, sheet_name="Combined Return Summary")
+
+        if groupsummary_with_total is not None:
+            groupsummary_with_total.to_excel(
+                writer, sheet_name="Style Group Summary", index=False
+            )
 
     st.download_button(
         "Download Excel (All Summaries)",
