@@ -30,11 +30,10 @@ def add_totals_column(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def pivot_to_pdf(pivot_df: pd.DataFrame,
-                 title: str = "Courier Partner Summary by Delivered Date") -> bytes:
-    """Convert a pivot DataFrame to simple table PDF."""
-    max_cols = len(pivot_df.columns) + 1  # +1 for index column
+                 title: str = "Summary") -> bytes:
+    """Generic PDF table (छोटे टेक्स्ट वाली summary के लिए)."""
+    max_cols = len(pivot_df.columns) + 1  # +1 index
 
-    # Decide orientation based on column count
     orientation = "L" if max_cols > 7 else "P"
     pdf_width = 297 if orientation == "L" else 210
 
@@ -43,6 +42,7 @@ def pivot_to_pdf(pivot_df: pd.DataFrame,
 
     pdf.set_font("Arial", "B", 14)
     pdf.cell(0, 10, title, ln=1, align="C")
+    pdf.ln(3)
 
     pdf.set_font("Arial", "", 8)
 
@@ -50,7 +50,6 @@ def pivot_to_pdf(pivot_df: pd.DataFrame,
     usable_width = pdf_width - 2 * margin_lr
     col_width = max(15, usable_width // max_cols)
 
-    # Prepare data rows (index as first column)
     col_names = [""] + list(pivot_df.columns)
     data = [col_names]
 
@@ -70,7 +69,83 @@ def pivot_to_pdf(pivot_df: pd.DataFrame,
     return pdf_bytes
 
 
-# ----------------- Upload section (with triangle) -----------------
+def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
+                            title: str = "Style Group Reason Summary") -> bytes:
+    """
+    Style Group के लिए special PDF:
+    - Reason column wide
+    - Text wrapping
+    - कोई extra Grand Total column नहीं
+    """
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.add_page()
+
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, title, ln=1, align="C")
+    pdf.ln(3)
+
+    # Layout
+    pdf_width = 297
+    margin = 8
+    usable_width = pdf_width - 2 * margin
+
+    reason_col_width = 120
+    other_col_width = (usable_width - reason_col_width) / max(1, len(pivot_df.columns))
+
+    # Header
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_fill_color(220, 220, 220)
+
+    pdf.cell(reason_col_width, 8, "Detailed Return Reason", border=1, align="C", fill=True)
+    for col in pivot_df.columns:
+        pdf.cell(other_col_width, 8, str(col)[:20], border=1, align="C", fill=True)
+    pdf.ln()
+
+    # Data rows
+    pdf.set_font("Arial", "", 8)
+    max_chars_per_line = 50
+    line_height = 5
+
+    for idx, row in pivot_df.iterrows():
+        reason_text = str(idx)
+
+        # Wrap reason into lines
+        lines = []
+        for i in range(0, len(reason_text), max_chars_per_line):
+            lines.append(reason_text[i:i + max_chars_per_line])
+
+        cell_height = line_height * max(1, len(lines))
+
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+
+        # Reason column (multi-line, border left+top+bottom)
+        pdf.multi_cell(
+            reason_col_width, line_height, "\n".join(lines),
+            border=1, align="L"
+        )
+
+        # Move to right side for numeric columns
+        pdf.set_xy(x_start + reason_col_width, y_start)
+
+        for val in row:
+            pdf.cell(
+                other_col_width, cell_height,
+                str(int(val)) if isinstance(val, (int, float)) else str(val),
+                border=1, align="C"
+            )
+
+        pdf.ln(cell_height)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        pdf.output(tmp.name)
+        tmp.seek(0)
+        pdf_bytes = tmp.read()
+
+    return pdf_bytes
+
+
+# ----------------- Upload section -----------------
 with st.expander("Upload CSV/XLSX Files", expanded=True):
     uploaded_files = st.file_uploader(
         "Upload CSV/XLSX Files",
@@ -96,7 +171,7 @@ if uploaded_files:
             else x
         )
 
-    # Date column को proper date में बदलें
+    # Date to proper date
     if "Return Created Date" in df_all.columns:
         df_all["Return Created Date"] = pd.to_datetime(
             df_all["Return Created Date"],
@@ -145,7 +220,7 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # ----------------- UPDATED SKU filter -----------------
+    # SKU filter
     if "SKU" in df_all.columns:
         all_skus = sorted(
             str(x) for x in df_all["SKU"].dropna().unique()
@@ -153,7 +228,6 @@ if uploaded_files:
 
         st.sidebar.write("SKU Filters:")
 
-        # Search box (substring, case-insensitive)
         sku_search = st.sidebar.text_input("Search SKU")
 
         if sku_search:
@@ -179,7 +253,7 @@ if uploaded_files:
     else:
         selected_skus = []
 
-    # ----------------- Apply Filters to df_all -----------------
+    # ----------------- Apply Filters -----------------
     df_filtered = df_all.copy()
 
     if "Return Created Date" in df_filtered.columns and selected_dates:
@@ -202,7 +276,7 @@ if uploaded_files:
             df_filtered["SKU"].isin(selected_skus)
         ]
 
-    # ----------------- Top KPI Boxes (filtered data पर) -----------------
+    # ----------------- KPI Boxes -----------------
     courier_rto_count = 0
     customer_return_count = 0
 
@@ -248,7 +322,7 @@ if uploaded_files:
         unsafe_allow_html=True,
     )
 
-    # ----------------- Courier & Customer Summary Tables -----------------
+    # ----------------- Courier & Customer Summary -----------------
     required_cols = {"Return Created Date", "Type of Return", "Courier Partner", "Qty"}
     if required_cols.issubset(df_filtered.columns):
         df_filtered["Qty"] = pd.to_numeric(
@@ -311,40 +385,33 @@ if uploaded_files:
         else:
             st.info("No Customer Return data for selected filters.")
 
-        # -------- Combined Return Summary (Courier + Customer) --------
-        combined_required_cols = {
-            "Return Created Date", "Courier Partner", "Qty"
-        }
+        # Combined Return Summary (RTO + Customer)
+        combined_df = df_filtered.copy()
+        combined_df["Qty"] = pd.to_numeric(
+            combined_df["Qty"], errors="coerce"
+        ).fillna(0)
 
-        if combined_required_cols.issubset(df_filtered.columns):
-            st.subheader("Combined Return Summary (All Returns)")
+        combined_pivot = (
+            combined_df
+            .groupby(["Return Created Date", "Courier Partner"])["Qty"]
+            .sum()
+            .unstack(fill_value=0)
+        )
+        combined_pivot = add_totals_column(combined_pivot)
 
-            combined_df = df_filtered.copy()
-            combined_df["Qty"] = pd.to_numeric(
-                combined_df["Qty"], errors="coerce"
-            ).fillna(0)
+        st.subheader("Combined Return Summary (All Returns)")
+        st.dataframe(combined_pivot, use_container_width=True)
 
-            combined_pivot = (
-                combined_df
-                .groupby(["Return Created Date", "Courier Partner"])["Qty"]
-                .sum()
-                .unstack(fill_value=0)
-            )
-
-            combined_pivot = add_totals_column(combined_pivot)
-
-            st.dataframe(combined_pivot, use_container_width=True)
-
-            pdf_combined = pivot_to_pdf(
-                combined_pivot,
-                title="Combined Return Summary (All Returns)"
-            )
-            st.download_button(
-                "Download Combined Return Summary PDF",
-                pdf_combined,
-                "combined_return_summary.pdf",
-                "application/pdf"
-            )
+        pdf_combined = pivot_to_pdf(
+            combined_pivot,
+            title="Combined Return Summary (All Returns)"
+        )
+        st.download_button(
+            "Download Combined Return Summary PDF",
+            pdf_combined,
+            "combined_return_summary.pdf",
+            "application/pdf"
+        )
 
     # ----------------- SKU-wise Return Reason Summary -----------------
     if {"SKU", "Detailed Return Reason"}.issubset(df_filtered.columns):
@@ -367,7 +434,7 @@ if uploaded_files:
         reason_pivot = add_grand_totals(reason_pivot)
         st.dataframe(reason_pivot, use_container_width=True)
 
-    # -------- Style Group Reason Summary by keyword (VERTICAL + GRAND TOTAL + PDF) --------
+    # ----------------- Style Group Reason Summary (vertical) -----------------
     st.subheader("Style Group Reason Summary by keyword")
     stylegroup_key = st.text_input(
         "Enter Style Group keyword (e.g. POCKET TIE)"
@@ -401,8 +468,8 @@ if uploaded_files:
                 .reset_index(name="Return Count")
             )
 
-            # Grand Total row
             total_count = groupsummary["Return Count"].sum()
+
             grand_total_row = pd.DataFrame({
                 "Style Group": ["Grand Total"],
                 "Detailed Return Reason": [""],
@@ -422,16 +489,15 @@ if uploaded_files:
                 use_container_width=True
             )
 
-            # PDF के लिए pivot (reason vertical index)
-            groupsummary_pivot = groupsummary_with_total.pivot_table(
+            # PDF की shape: index = Detailed Return Reason, columns = Style Group
+            groupsummary_pivot = groupsummary.pivot_table(
                 index="Detailed Return Reason",
                 columns="Style Group",
                 values="Return Count",
-                fill_value=0,
-                aggfunc="sum"
+                fill_value=0
             )
 
-            pdf_stylegroup = pivot_to_pdf(
+            pdf_stylegroup = pivot_to_pdf_stylegroup(
                 groupsummary_pivot,
                 title=f"Style Group Reason Summary - {stylegroup_key}"
             )
@@ -448,7 +514,6 @@ if uploaded_files:
     # ----------------- Download Options -----------------
     st.subheader("Download Options")
 
-    # All data CSV
     csv_all = df_all.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download All Data CSV",
@@ -457,7 +522,6 @@ if uploaded_files:
         mime="text/csv"
     )
 
-    # Filtered data CSV
     csv_filtered = df_filtered.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download Filtered Data CSV",
@@ -466,7 +530,6 @@ if uploaded_files:
         mime="text/csv"
     )
 
-    # Excel with all summaries
     excel_buf = BytesIO()
     with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
         df_all.to_excel(writer, index=False, sheet_name="All Data")
