@@ -31,8 +31,8 @@ def add_totals_column(df: pd.DataFrame) -> pd.DataFrame:
 
 def pivot_to_pdf(pivot_df: pd.DataFrame,
                  title: str = "Summary") -> bytes:
-    """Generic PDF table (छोटे टेक्स्ट वाली summary के लिए)."""
-    max_cols = len(pivot_df.columns) + 1  # +1 index
+    """Generic summary tables के लिए simple PDF."""
+    max_cols = len(pivot_df.columns) + 1
 
     orientation = "L" if max_cols > 7 else "P"
     pdf_width = 297 if orientation == "L" else 210
@@ -70,12 +70,13 @@ def pivot_to_pdf(pivot_df: pd.DataFrame,
 
 
 def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
-                            title: str = "Style Group Reason Summary") -> bytes:
+                            title: str = "Style Group Reason Summary",
+                            grand_total: int = 0) -> bytes:
     """
-    Style Group के लिए special PDF:
+    Style Group reasons के लिए special PDF:
     - Reason column wide
     - Text wrapping
-    - कोई extra Grand Total column नहीं
+    - नीचे TOTAL row में grand_total दिखे
     """
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
@@ -84,7 +85,6 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
     pdf.cell(0, 10, title, ln=1, align="C")
     pdf.ln(3)
 
-    # Layout
     pdf_width = 297
     margin = 8
     usable_width = pdf_width - 2 * margin
@@ -109,7 +109,6 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
     for idx, row in pivot_df.iterrows():
         reason_text = str(idx)
 
-        # Wrap reason into lines
         lines = []
         for i in range(0, len(reason_text), max_chars_per_line):
             lines.append(reason_text[i:i + max_chars_per_line])
@@ -119,23 +118,31 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
         x_start = pdf.get_x()
         y_start = pdf.get_y()
 
-        # Reason column (multi-line, border left+top+bottom)
         pdf.multi_cell(
             reason_col_width, line_height, "\n".join(lines),
             border=1, align="L"
         )
 
-        # Move to right side for numeric columns
         pdf.set_xy(x_start + reason_col_width, y_start)
 
         for val in row:
-            pdf.cell(
-                other_col_width, cell_height,
-                str(int(val)) if isinstance(val, (int, float)) else str(val),
-                border=1, align="C"
-            )
+            if isinstance(val, (int, float)):
+                txt = str(int(val))
+            else:
+                txt = str(val)
+            pdf.cell(other_col_width, cell_height, txt, border=1, align="C")
 
         pdf.ln(cell_height)
+
+    # TOTAL row
+    if grand_total > 0:
+        pdf.set_font("Arial", "B", 9)
+        pdf.set_fill_color(200, 200, 200)
+
+        pdf.cell(reason_col_width, 10, "TOTAL", border=1, align="C", fill=True)
+        # केवल पहला style-group column का total दिखा रहे हैं
+        pdf.cell(other_col_width, 10, str(int(grand_total)), border=1, align="C", fill=True)
+        pdf.ln()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
@@ -441,7 +448,6 @@ if uploaded_files:
     )
 
     groupsummary_with_total = None
-    groupsummary_pivot = None
 
     if stylegroup_key and "SKU" in df_filtered.columns:
         temp_df = df_filtered.copy()
@@ -489,7 +495,7 @@ if uploaded_files:
                 use_container_width=True
             )
 
-            # PDF की shape: index = Detailed Return Reason, columns = Style Group
+            # PDF के लिए pivot (index = Detailed Return Reason)
             groupsummary_pivot = groupsummary.pivot_table(
                 index="Detailed Return Reason",
                 columns="Style Group",
@@ -499,7 +505,8 @@ if uploaded_files:
 
             pdf_stylegroup = pivot_to_pdf_stylegroup(
                 groupsummary_pivot,
-                title=f"Style Group Reason Summary - {stylegroup_key}"
+                title=f"Style Group Reason Summary - {stylegroup_key}",
+                grand_total=int(total_count)
             )
 
             st.download_button(
