@@ -1,4 +1,4 @@
-# retrun_full.py
+# retrun_full_final.py
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -7,7 +7,7 @@ import tempfile
 
 # ================== Streamlit Config ==================
 st.set_page_config(page_title="Courier Partner Delivery & Return Analysis", layout="wide")
-st.title("📦 Courier Partner Delivery & Return Analysis — Final Merged")
+st.title("📦 Courier Partner Delivery & Return Analysis — Final Merged (Variation-wise)")
 
 # ---------------- Helper functions ----------------
 
@@ -23,7 +23,6 @@ def df_make_integers(df: pd.DataFrame, exclude_cols=None) -> pd.DataFrame:
             if pd.api.types.is_numeric_dtype(df2[col]):
                 df2[col] = df2[col].fillna(0).astype(int)
             else:
-                # try to coerce safely for mostly-numeric columns
                 coerced = pd.to_numeric(df2[col], errors='coerce')
                 if coerced.notna().sum() > len(df2) * 0.6:
                     df2[col] = coerced.fillna(0).astype(int)
@@ -53,32 +52,6 @@ def add_grand_totals(df: pd.DataFrame, exclude_cols=None) -> pd.DataFrame:
     total_index = "Grand Total"
     try:
         total_df = pd.DataFrame([total_row], columns=df.columns, index=[total_index])
-        df_out = pd.concat([df, total_df])
-    except Exception:
-        df_out = df
-    return df_make_integers(df_out, exclude_cols=exclude_cols)
-
-def add_totals_column(df: pd.DataFrame, exclude_cols=None) -> pd.DataFrame:
-    """Add 'Total' column and 'Grand Total' row."""
-    if exclude_cols is None:
-        exclude_cols = []
-    df = df.copy()
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    if numeric_cols:
-        df['Total'] = df[numeric_cols].sum(axis=1).astype(int)
-    else:
-        df['Total'] = ""
-    total_row = {}
-    for col in df.columns:
-        if col in numeric_cols or col == 'Total':
-            try:
-                total_row[col] = int(df[col].sum())
-            except Exception:
-                total_row[col] = 0
-        else:
-            total_row[col] = ""
-    try:
-        total_df = pd.DataFrame([total_row], columns=df.columns, index=["Grand Total"])
         df_out = pd.concat([df, total_df])
     except Exception:
         df_out = df
@@ -129,12 +102,36 @@ def pivot_to_pdf(pivot_df: pd.DataFrame, title: str = "Summary", exclude_cols=No
     return pdf_bytes
 
 def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Reason Summary", grand_total: int = 0, exclude_cols=None) -> bytes:
-    """Render style-group reason table in a special wide-first-column PDF with total."""
+    """
+    Render style-group reason table in a special wide-first-column PDF with TOTAL column and GRAND TOTAL row.
+    Expects pivot_df where rows are Detailed Return Reason and columns are Variation sizes.
+    We will add a 'Total' column (row-wise sum) and a 'TOTAL' row (column-wise sum).
+    """
     if exclude_cols is None:
         exclude_cols = []
     pivot_df = pivot_df.copy()
     pivot_df = df_make_integers(pivot_df, exclude_cols=exclude_cols)
 
+    # Add row totals and total row (if not already present)
+    try:
+        # ensure numeric for sum
+        numeric_cols = pivot_df.select_dtypes(include=['number']).columns
+        if len(numeric_cols) > 0:
+            pivot_df['Total'] = pivot_df[numeric_cols].sum(axis=1).astype(int)
+            # compute total row
+            total_row = pivot_df.sum(axis=0)
+            # ensure TOTAL index name string
+            total_label = "TOTAL"
+            # convert totals to int where possible
+            try:
+                total_row = total_row.astype(int)
+            except Exception:
+                pass
+            pivot_df.loc[total_label] = total_row
+    except Exception:
+        pass
+
+    # PDF layout params
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
@@ -145,17 +142,21 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Re
     margin = 8
     usable_width = pdf_width - 2 * margin
 
-    reason_col_width = 120
+    reason_col_width = 110
     other_cols = max(1, len(pivot_df.columns))
     other_col_width = int((usable_width - reason_col_width) / other_cols) if other_cols > 0 else 50
 
+    # Header
     pdf.set_font("Arial", "B", 9)
     pdf.set_fill_color(220, 220, 220)
     pdf.cell(reason_col_width, 8, "Detailed Return Reason", border=1, align="C", fill=True)
     for col in pivot_df.columns:
-        pdf.cell(other_col_width, 8, str(col)[:20], border=1, align="C", fill=True)
+        # shorten header text to fit
+        header_text = str(col)
+        pdf.cell(other_col_width, 8, header_text[:15], border=1, align="C", fill=True)
     pdf.ln()
 
+    # Body
     pdf.set_font("Arial", "", 8)
     max_chars_per_line = 60
     line_height = 5
@@ -168,25 +169,37 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Re
         x_start = pdf.get_x()
         y_start = pdf.get_y()
 
+        # Reason multi-line cell
         pdf.multi_cell(reason_col_width, line_height, "\n".join(lines), border=1, align="L")
         pdf.set_xy(x_start + reason_col_width, y_start)
-        for val in row:
-            txt = str(int(val)) if isinstance(val, (int, float)) else str(val)
-            pdf.cell(other_col_width, cell_height, txt[:20], border=1, align="C")
+
+        # If this is TOTAL row, use fill color
+        is_total_row = str(idx).strip().upper() in ("TOTAL", "GRAND TOTAL", "GRAND_TOTAL")
+
+        if is_total_row:
+            pdf.set_fill_color(200, 200, 200)
+            fill_flag = True
+            pdf.set_font("Arial", "B", 9)
+        else:
+            fill_flag = False
+            pdf.set_font("Arial", "", 8)
+
+        for col in pivot_df.columns:
+            val = row[col]
+            # format numeric
+            try:
+                if pd.isna(val):
+                    text = ""
+                elif isinstance(val, (int, float)) and float(val).is_integer():
+                    text = str(int(val))
+                else:
+                    text = str(val)
+            except Exception:
+                text = str(val)
+            pdf.cell(other_col_width, cell_height, text[:15], border=1, align="C", fill=fill_flag)
         pdf.ln(cell_height)
 
-    if grand_total:
-        pdf.set_font("Arial", "B", 9)
-        pdf.set_fill_color(200, 200, 200)
-        pdf.cell(reason_col_width, 10, "TOTAL", border=1, align="C", fill=True)
-        if pivot_df.shape[1] >= 1:
-            pdf.cell(other_col_width, 10, str(int(grand_total)), border=1, align="C", fill=True)
-            for _ in range(pivot_df.shape[1] - 1):
-                pdf.cell(other_col_width, 10, "", border=1, align="C", fill=True)
-        else:
-            pdf.cell(other_col_width, 10, str(int(grand_total)), border=1, align="C", fill=True)
-        pdf.ln()
-
+    # Footer: optional grand_total highlight (already included as TOTAL row)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
         tmp.seek(0)
@@ -412,7 +425,7 @@ if uploaded_files:
         st.info("SKU-wise summary requires 'SKU' and a return/reason column in the uploaded data.")
 
     # ----------------- Style Group Reason Summary (24_TT1 logic) using df_style -----------------
-    st.subheader("Style Group Reason Summary by keyword (24_TT1 logic) — now includes Variation")
+    st.subheader("Style Group Reason Summary by keyword (24_TT1 logic) — Variation-wise with Totals")
     stylegroup_key = st.text_input("Enter Style Group keyword (e.g. POCKET TIE)")
 
     groupsummary_with_total = None
@@ -423,51 +436,71 @@ if uploaded_files:
         )
         group_df = temp_df[temp_df["Style Group"].notna()]
 
-        # Expect 'Variation' column name as provided
-        var_col = "Variation"
+        var_col = "Variation"  # user confirmed
 
+        # Check required cols
         if not group_df.empty and {"Detailed Return Reason", "Qty"}.issubset(group_df.columns):
-            # Ensure Variation exists, else create placeholder so grouping still works
+            # Ensure Variation exists; if not, fill with Unknown
             if var_col not in group_df.columns:
                 group_df[var_col] = "Unknown"
 
             group_df["Qty"] = pd.to_numeric(group_df["Qty"], errors="coerce").fillna(0)
 
-            # Group by Style Group, Variation, Detailed Return Reason
+            # Build groupsummary aggregated by Style Group, Variation, Detailed Return Reason
             groupsummary = (
                 group_df.groupby(["Style Group", var_col, "Detailed Return Reason"])["Qty"]
                 .sum()
                 .reset_index(name="Return Count")
             )
 
-            total_count = groupsummary["Return Count"].sum()
-
-            # Prepare display table with Grand Total row
-            grand_total_row = pd.DataFrame({
-                "Style Group": ["Grand Total"],
-                var_col: [""],
-                "Detailed Return Reason": [""],
-                "Return Count": [int(total_count)]
-            })
-            groupsummary_display = pd.concat([groupsummary.sort_values(by="Return Count", ascending=False), grand_total_row], ignore_index=True)
-            groupsummary_with_total = groupsummary_display  # for Excel export later
-
-            st.dataframe(groupsummary_display, use_container_width=True)
-
-            # prepare pivot for pdf (index = Detailed Return Reason, columns = Variation)
+            # Pivot to get Variation columns (unique values will form columns)
             try:
                 pivot_pdf_df = groupsummary.pivot_table(index="Detailed Return Reason", columns=var_col, values="Return Count", fill_value=0)
             except Exception:
-                pivot_pdf_df = groupsummary.pivot_table(index="Detailed Return Reason", values="Return Count", aggfunc="sum", fill_value=0)
+                # fallback: simple aggregation per reason
+                pivot_pdf_df = groupsummary.groupby("Detailed Return Reason")["Return Count"].sum().to_frame()
 
-            # ensure ints where possible
+            # Add Total column (row sums) and TOTAL row (column sums)
             try:
-                pivot_pdf_df = pivot_pdf_df.astype(int)
+                # only sum numeric columns
+                numeric_cols = pivot_pdf_df.select_dtypes(include=['number']).columns.tolist()
+                if numeric_cols:
+                    pivot_pdf_df["Total"] = pivot_pdf_df[numeric_cols].sum(axis=1).astype(int)
+                    # add TOTAL row (column-wise sums)
+                    total_row = pivot_pdf_df.sum(axis=0)
+                    try:
+                        total_row = total_row.astype(int)
+                    except Exception:
+                        pass
+                    pivot_pdf_df.loc["TOTAL"] = total_row
             except Exception:
                 pass
 
-            pdf_stylegroup = pivot_to_pdf_stylegroup(pivot_pdf_df, title=f"Style Group Reason Summary - {stylegroup_key}", grand_total=int(total_count))
-            st.download_button("Download Style Group + Variation Summary PDF", pdf_stylegroup, f"style_group_variation_summary_{stylegroup_key}.pdf", "application/pdf")
+            # For display on web: show pivot with totals (convert ints where possible)
+            display_df = pivot_pdf_df.copy()
+            try:
+                display_df = display_df.fillna(0)
+                for c in display_df.columns:
+                    if pd.api.types.is_numeric_dtype(display_df[c]):
+                        display_df[c] = display_df[c].astype(int)
+            except Exception:
+                pass
+
+            # Prepare a neat display with Reason as first column
+            display_df_reset = display_df.reset_index().rename(columns={"index": "Detailed Return Reason"})
+            st.dataframe(display_df_reset, use_container_width=True)
+
+            # Create downloadable PDF using pivot_to_pdf_stylegroup
+            try:
+                # compute total_count (grand total) from groupsummary
+                total_count = int(groupsummary["Return Count"].sum()) if not groupsummary.empty else 0
+                pdf_bytes = pivot_to_pdf_stylegroup(pivot_pdf_df, title=f"Style Group Reason Summary - {stylegroup_key}", grand_total=total_count)
+                st.download_button("📥 Download Style Group + Variation (PDF)", pdf_bytes, file_name=f"style_group_variation_summary_{stylegroup_key}.pdf", mime="application/pdf")
+            except Exception as e:
+                st.warning(f"Unable to prepare Style Group PDF: {e}")
+
+            # Save for Excel export
+            groupsummary_with_total = display_df_reset.copy()
         else:
             st.info("No SKUs matching that keyword or required columns (Detailed Return Reason, Qty) missing in data.")
     else:
@@ -510,6 +543,7 @@ if uploaded_files:
                     pass
             if groupsummary_with_total is not None:
                 try:
+                    # groupsummary_with_total already had columns with Detailed Return Reason and totals
                     groupsummary_with_total.to_excel(writer, sheet_name="Style Group Summary", index=False)
                 except Exception:
                     pass
