@@ -103,35 +103,23 @@ def pivot_to_pdf(pivot_df: pd.DataFrame, title: str = "Summary", exclude_cols=No
 
 def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Reason Summary", grand_total: int = 0, exclude_cols=None) -> bytes:
     """
-    Render style-group reason table in a special wide-first-column PDF with TOTAL column and GRAND TOTAL row.
-    Expects pivot_df where rows are Detailed Return Reason and columns are Variation sizes.
-    We will add a 'Total' column (row-wise sum) and a 'TOTAL' row (column-wise sum).
+    Render the provided pivot_df (expected to ALREADY include 'Total' column and 'TOTAL' row if desired)
+    to a landscape A4 PDF. This function WILL NOT recompute totals; it renders the DataFrame as-is to
+    ensure PDF matches the on-screen table exactly.
     """
     if exclude_cols is None:
         exclude_cols = []
-    pivot_df = pivot_df.copy()
-    pivot_df = df_make_integers(pivot_df, exclude_cols=exclude_cols)
+    df = pivot_df.copy()
 
-    # Add row totals and total row (if not already present)
-    try:
-        # ensure numeric for sum
-        numeric_cols = pivot_df.select_dtypes(include=['number']).columns
-        if len(numeric_cols) > 0:
-            pivot_df['Total'] = pivot_df[numeric_cols].sum(axis=1).astype(int)
-            # compute total row
-            total_row = pivot_df.sum(axis=0)
-            # ensure TOTAL index name string
-            total_label = "TOTAL"
-            # convert totals to int where possible
-            try:
-                total_row = total_row.astype(int)
-            except Exception:
-                pass
-            pivot_df.loc[total_label] = total_row
-    except Exception:
-        pass
+    # Convert numeric columns to int where possible for clean display
+    for c in df.columns:
+        try:
+            df[c] = pd.to_numeric(df[c], errors='ignore')
+            if pd.api.types.is_numeric_dtype(df[c]):
+                df[c] = df[c].fillna(0).astype(int)
+        except Exception:
+            pass
 
-    # PDF layout params
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
@@ -143,25 +131,24 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Re
     usable_width = pdf_width - 2 * margin
 
     reason_col_width = 110
-    other_cols = max(1, len(pivot_df.columns))
-    other_col_width = int((usable_width - reason_col_width) / other_cols) if other_cols > 0 else 50
+    cols = list(df.columns)
+    col_count = max(1, len(cols))
+    other_col_width = int((usable_width - reason_col_width) / col_count) if col_count > 0 else 50
 
     # Header
     pdf.set_font("Arial", "B", 9)
     pdf.set_fill_color(220, 220, 220)
     pdf.cell(reason_col_width, 8, "Detailed Return Reason", border=1, align="C", fill=True)
-    for col in pivot_df.columns:
-        # shorten header text to fit
-        header_text = str(col)
-        pdf.cell(other_col_width, 8, header_text[:15], border=1, align="C", fill=True)
+    for col in cols:
+        pdf.cell(other_col_width, 8, str(col)[:15], border=1, align="C", fill=True)
     pdf.ln()
 
-    # Body
+    # Body: render rows exactly as in df
     pdf.set_font("Arial", "", 8)
     max_chars_per_line = 60
     line_height = 5
 
-    for idx, row in pivot_df.iterrows():
+    for idx, row in df.iterrows():
         reason_text = str(idx)
         lines = [reason_text[i:i + max_chars_per_line] for i in range(0, len(reason_text), max_chars_per_line)]
         cell_height = line_height * max(1, len(lines))
@@ -169,12 +156,10 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Re
         x_start = pdf.get_x()
         y_start = pdf.get_y()
 
-        # Reason multi-line cell
         pdf.multi_cell(reason_col_width, line_height, "\n".join(lines), border=1, align="L")
         pdf.set_xy(x_start + reason_col_width, y_start)
 
-        # If this is TOTAL row, use fill color
-        is_total_row = str(idx).strip().upper() in ("TOTAL", "GRAND TOTAL", "GRAND_TOTAL")
+        is_total_row = str(idx).strip().upper() == "TOTAL"
 
         if is_total_row:
             pdf.set_fill_color(200, 200, 200)
@@ -184,27 +169,28 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame, title: str = "Style Group Re
             fill_flag = False
             pdf.set_font("Arial", "", 8)
 
-        for col in pivot_df.columns:
+        for col in cols:
             val = row[col]
-            # format numeric
-            try:
-                if pd.isna(val):
-                    text = ""
-                elif isinstance(val, (int, float)) and float(val).is_integer():
-                    text = str(int(val))
+            if pd.isna(val):
+                text = ""
+            else:
+                # format numeric values as ints when possible
+                if isinstance(val, (int, float)) or pd.api.types.is_numeric_dtype(type(val)):
+                    try:
+                        text = str(int(val))
+                    except Exception:
+                        text = str(val)
                 else:
                     text = str(val)
-            except Exception:
-                text = str(val)
             pdf.cell(other_col_width, cell_height, text[:15], border=1, align="C", fill=fill_flag)
         pdf.ln(cell_height)
 
-    # Footer: optional grand_total highlight (already included as TOTAL row)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
         tmp.seek(0)
         pdf_bytes = tmp.read()
     return pdf_bytes
+
 
 # ----------------- Upload section -----------------
 with st.expander("📁 Upload CSV/XLSX Files", expanded=True):
