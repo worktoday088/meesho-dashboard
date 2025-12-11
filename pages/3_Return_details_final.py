@@ -1,4 +1,3 @@
-
 # retrun_full.py
 import streamlit as st
 import pandas as pd
@@ -413,7 +412,7 @@ if uploaded_files:
         st.info("SKU-wise summary requires 'SKU' and a return/reason column in the uploaded data.")
 
     # ----------------- Style Group Reason Summary (24_TT1 logic) using df_style -----------------
-    st.subheader("Style Group Reason Summary by keyword (24_TT1 logic)")
+    st.subheader("Style Group Reason Summary by keyword (24_TT1 logic) — now includes Variation")
     stylegroup_key = st.text_input("Enter Style Group keyword (e.g. POCKET TIE)")
 
     groupsummary_with_total = None
@@ -424,115 +423,58 @@ if uploaded_files:
         )
         group_df = temp_df[temp_df["Style Group"].notna()]
 
+        # Expect 'Variation' column name as provided
+        var_col = "Variation"
+
         if not group_df.empty and {"Detailed Return Reason", "Qty"}.issubset(group_df.columns):
+            # Ensure Variation exists, else create placeholder so grouping still works
+            if var_col not in group_df.columns:
+                group_df[var_col] = "Unknown"
+
             group_df["Qty"] = pd.to_numeric(group_df["Qty"], errors="coerce").fillna(0)
-            groupsummary = group_df.groupby(["Style Group", "Detailed Return Reason"])["Qty"].sum().reset_index(name="Return Count")
+
+            # Group by Style Group, Variation, Detailed Return Reason
+            groupsummary = (
+                group_df.groupby(["Style Group", var_col, "Detailed Return Reason"])["Qty"]
+                .sum()
+                .reset_index(name="Return Count")
+            )
+
             total_count = groupsummary["Return Count"].sum()
+
+            # Prepare display table with Grand Total row
             grand_total_row = pd.DataFrame({
                 "Style Group": ["Grand Total"],
+                var_col: [""],
                 "Detailed Return Reason": [""],
                 "Return Count": [int(total_count)]
             })
-            groupsummary_with_total = pd.concat([groupsummary.sort_values(by="Return Count", ascending=False), grand_total_row], ignore_index=True)
-            st.dataframe(groupsummary_with_total, use_container_width=True)
+            groupsummary_display = pd.concat([groupsummary.sort_values(by="Return Count", ascending=False), grand_total_row], ignore_index=True)
+            groupsummary_with_total = groupsummary_display  # for Excel export later
 
-            # prepare pivot for pdf (index = Detailed Return Reason)
-            groupsummary_pivot = groupsummary.pivot_table(index="Detailed Return Reason", columns="Style Group", values="Return Count", fill_value=0)
-            pdf_stylegroup = pivot_to_pdf_stylegroup(groupsummary_pivot, title=f"Style Group Reason Summary - {stylegroup_key}", grand_total=int(total_count))
-            st.download_button("Download Style Group Summary PDF", pdf_stylegroup, f"style_group_summary_{stylegroup_key}.pdf", "application/pdf")
+            st.dataframe(groupsummary_display, use_container_width=True)
+
+            # prepare pivot for pdf (index = Detailed Return Reason, columns = Variation)
+            try:
+                pivot_pdf_df = groupsummary.pivot_table(index="Detailed Return Reason", columns=var_col, values="Return Count", fill_value=0)
+            except Exception:
+                pivot_pdf_df = groupsummary.pivot_table(index="Detailed Return Reason", values="Return Count", aggfunc="sum", fill_value=0)
+
+            # ensure ints where possible
+            try:
+                pivot_pdf_df = pivot_pdf_df.astype(int)
+            except Exception:
+                pass
+
+            pdf_stylegroup = pivot_to_pdf_stylegroup(pivot_pdf_df, title=f"Style Group Reason Summary - {stylegroup_key}", grand_total=int(total_count))
+            st.download_button("Download Style Group + Variation Summary PDF", pdf_stylegroup, f"style_group_variation_summary_{stylegroup_key}.pdf", "application/pdf")
         else:
             st.info("No SKUs matching that keyword or required columns (Detailed Return Reason, Qty) missing in data.")
     else:
         if stylegroup_key:
             st.info("Style Group requires 'SKU' and presence of 'Detailed Return Reason' and 'Qty' columns.")
 
-    
-# ----------------- Style Group Reason Summary (24_TT1 logic) UPDATED with Variation -----------------
-st.subheader("Style Group Reason Summary by keyword + Variation (24_TT1 logic)")
-stylegroup_key = st.text_input("Enter Style Group keyword (e.g. POCKET TIE)")
-
-groupsummary_with_total = None
-if stylegroup_key and "SKU" in df_style.columns:
-
-    temp_df = df_style.copy()
-
-    # Identify Style Group match from SKU
-    temp_df["Style Group"] = temp_df["SKU"].apply(
-        lambda x: stylegroup_key if stylegroup_key.lower() in str(x).lower() else None
-    )
-
-    # Filter only matched rows
-    group_df = temp_df[temp_df["Style Group"].notna()]
-
-    # Required columns check (Variation is expected by name)
-    required_cols = {"Detailed Return Reason", "Qty"}
-    var_col = "Variation"  # user confirmed column name is 'Variation'
-
-    if var_col not in group_df.columns:
-        # Create placeholder if missing so grouping still works
-        group_df[var_col] = "Unknown"
-
-    if not required_cols.issubset(group_df.columns):
-        missing = required_cols - set(group_df.columns)
-        st.info(f"Required columns missing: {missing}. Style Group feature needs these columns.")
-    else:
-        # Ensure Qty numeric
-        group_df["Qty"] = pd.to_numeric(group_df["Qty"], errors="coerce").fillna(0)
-
-        # Group by Style Group, Variation, and Detailed Return Reason
-        groupsummary = (
-            group_df.groupby(["Style Group", var_col, "Detailed Return Reason"]) ["Qty"]
-            .sum()
-            .reset_index(name="Return Count")
-        )
-
-        total_count = int(groupsummary["Return Count"].sum()) if not groupsummary.empty else 0
-
-        # Display the full table on the dashboard
-        groupsummary_display = groupsummary.sort_values(by="Return Count", ascending=False)
-        st.dataframe(groupsummary_display, use_container_width=True)
-
-        # Create pivot for PDF: index = Detailed Return Reason, columns = Variation
-        try:
-            pivot_pdf_df = groupsummary.pivot_table(
-                index=["Detailed Return Reason"],
-                columns=[var_col],
-                values="Return Count",
-                fill_value=0
-            )
-        except Exception:
-            pivot_pdf_df = groupsummary.pivot_table(
-                index=["Detailed Return Reason"],
-                values="Return Count",
-                aggfunc="sum",
-                fill_value=0
-            )
-
-        # Convert to int where possible for nicer PDF display
-        try:
-            pivot_pdf_df = pivot_pdf_df.astype(int)
-        except Exception:
-            pass
-
-        pdf_stylegroup = pivot_to_pdf_stylegroup(
-            pivot_pdf_df,
-            title=f"Style Group + Variation Summary - {stylegroup_key}",
-            grand_total=total_count
-        )
-
-        st.download_button(
-            "📥 Download Style Group + Variation PDF",
-            pdf_stylegroup,
-            file_name=f"style_group_variation_{stylegroup_key}.pdf",
-            mime="application/pdf"
-        )
-
-else:
-    if stylegroup_key:
-        st.info("Style Group requires SKU, Detailed Return Reason and Qty columns. Variation column is optional but preferred.")
-
-
-# ----------------- Download Options -----------------
+    # ----------------- Download Options -----------------
     st.subheader("💾 Download Options")
 
     try:
