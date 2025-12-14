@@ -1,3 +1,14 @@
+# ============================================================
+# PDF → Data (Meesho) — FULL UPDATED FINAL SCRIPT
+# Features:
+# 1. Combined Courier Summary (All Sellers, Unique AWB)
+# 2. Seller-wise Courier Summary (Expandable)
+# 3. Duplicate AWB Ignored (Packet = Unique AWB)
+# 4. Hide / Unhide Upload Section
+# 5. Hide / Unhide Data Preview (Accordion)
+# 6. Excel + PDF Reports with Totals
+# ============================================================
+
 import streamlit as st
 import fitz  # PyMuPDF
 import re
@@ -9,18 +20,26 @@ import zipfile
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-st.set_page_config(page_title="PDF → Data (Meesho) — Final", layout="wide")
+# ------------------------------------------------------------
+# PAGE CONFIG
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="PDF → Data (Meesho) — Final",
+    layout="wide"
+)
 
-# -----------------------
-# Regex Patterns
-# -----------------------
+st.title("📦 PDF → Data (Meesho) — FINAL FULL VERSION")
+st.caption("Combined + Seller-wise Courier Summary | Unique AWB Packet Logic")
+
+# ------------------------------------------------------------
+# REGEX DEFINITIONS
+# ------------------------------------------------------------
 size_pattern = r"(XS|S|M|L|XL|XXL|XXXL|FREE SIZE|24|26|28|30|32|34|36|38|40|42|44|46|48|50|6-7 Years|7-8 Years|8-9 Years|9-10 Years|10-11 Years|11-12 Years|12-13 Years|13-14 Years|14-15 Years|15-16 Years|16-17 Years|17-18 Years)"
 
 awb_patterns = [
     r"\bVL\d{10,14}\b",
     r"\bSF\d{10,14}[A-Z]{2,3}\b",
     r"\b\d{14,16}\b",
-    r"\b[A-Z0-9]{10,16}\b"
 ]
 
 courier_regex = re.compile(
@@ -28,153 +47,81 @@ courier_regex = re.compile(
     re.IGNORECASE
 )
 
-# -----------------------
-# Helpers
-# -----------------------
-def sanitize_sheet_name(name: str) -> str:
-    s = re.sub(r'[\/*?:\[\]]', '_', (name or "UnknownSeller").strip().replace(" ", "_"))
-    return s[:31] if s else "UnknownSeller"
+# ------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------
+
+def sanitize_sheet_name(name: str, suffix: str = "") -> str:
+    base = re.sub(r'[\\/*?:\[\]]', '_', name.replace(" ", "_"))
+    max_len = 31 - len(suffix)
+    return base[:max_len] + suffix
 
 
-# -----------------------
-# Core Extraction Logic
-# -----------------------
+# ------------------------------------------------------------
+# EXTRACTION LOGIC
+# ------------------------------------------------------------
+
 def extract_from_page_text(text: str, entry_date: str):
-    seller_block = re.search(r"If undelivered, return to:\s*\n([^\n]+)", text)
-    seller = seller_block.group(1).strip() if seller_block else "UnknownSeller"
-    seller_filename = sanitize_sheet_name(seller)
+    seller_m = re.search(r"If undelivered, return to:\s*\n([^\n]+)", text)
+    seller = seller_m.group(1).strip() if seller_m else "UnknownSeller"
 
     courier_m = courier_regex.search(text)
-    courier = courier_m.group(1).strip() if courier_m else "UnknownCourier"
+    courier = courier_m.group(1).title() if courier_m else "Unknown"
 
-    awb_number = next(
-        (m.group(0) for patt in awb_patterns if (m := re.search(patt, text))),
-        "N/A"
-    )
+    awb = next((m.group(0) for p in awb_patterns if (m := re.search(p, text))), "")
 
     order_date = (m.group(1) if (m := re.search(r"Order Date\s+(\d{2}\.\d{2}\.\d{4})", text)) else "")
     invoice_date = (m.group(1) if (m := re.search(r"Invoice Date\s+(\d{2}\.\d{2}\.\d{4})", text)) else "")
 
-    product_lines = re.compile(
+    product_lines = re.findall(
         rf"(.+?)\s+{size_pattern}\s+(\d+)\s+(.+?)\s+([0-9_,\s]+)",
-        re.MULTILINE
-    ).findall(text)
+        text
+    )
 
     rows = []
-
-    for item in product_lines:
-        if len(item) < 5:
-            continue
-
-        sku, size, qty, color, order_ids_raw = item
-        qty = int(qty.strip())
-
-        order_id_list = [oid.strip() for oid in order_ids_raw.split(",") if oid.strip()]
-
-        # -------- CASE 1: Single Order ID (Qty may be >1)
-        if len(order_id_list) == 1:
-            oid = order_id_list[0]
-
-            gst_price = ""
-            base_price = ""
-
-            gst_m = re.search(
-                rf"{re.escape(oid)}.*?Total\s+Rs\.\d+\.\d+\s+Rs\.(\d+\.\d+)",
-                text,
-                re.DOTALL
-            )
-            if gst_m:
-                gst_price = gst_m.group(1)
-
-            base_m = re.search(
-                rf"{re.escape(oid)}.*?Taxable Value.*?Rs\.(\d+\.\d+)",
-                text,
-                re.DOTALL
-            )
-            if base_m:
-                base_price = base_m.group(1)
-
+    for sku, size, qty, color, order_ids_raw in product_lines:
+        order_ids = [o.strip() for o in order_ids_raw.split(",") if o.strip()]
+        for oid in order_ids:
             rows.append({
                 "Order ID": oid,
                 "SKU": sku.strip(),
                 "Size": size.strip(),
-                "Qty": str(qty),
+                "Qty": "1",
                 "Color": color.strip(),
                 "Courier": courier,
-                "AWB Number": awb_number,
-                "Price (Incl. GST)": gst_price,
-                "Price (Excl. GST)": base_price,
+                "AWB Number": awb,
                 "Order Date": order_date,
                 "Invoice Date": invoice_date,
                 "Entry Date": entry_date,
                 "Source PDF": "",
-                "Action": ""
             })
 
-        # -------- CASE 2 / 3: Multiple Order IDs
-        else:
-            for oid in order_id_list:
-                gst_price = ""
-                base_price = ""
-
-                gst_m = re.search(
-                    rf"{re.escape(oid)}.*?Total\s+Rs\.\d+\.\d+\s+Rs\.(\d+\.\d+)",
-                    text,
-                    re.DOTALL
-                )
-                if gst_m:
-                    gst_price = gst_m.group(1)
-
-                base_m = re.search(
-                    rf"{re.escape(oid)}.*?Taxable Value.*?Rs\.(\d+\.\d+)",
-                    text,
-                    re.DOTALL
-                )
-                if base_m:
-                    base_price = base_m.group(1)
-
-                rows.append({
-                    "Order ID": oid,
-                    "SKU": sku.strip(),
-                    "Size": size.strip(),
-                    "Qty": "1",
-                    "Color": color.strip(),
-                    "Courier": courier,
-                    "AWB Number": awb_number,
-                    "Price (Incl. GST)": gst_price,
-                    "Price (Excl. GST)": base_price,
-                    "Order Date": order_date,
-                    "Invoice Date": invoice_date,
-                    "Entry Date": entry_date,
-                    "Source PDF": "",
-                    "Action": ""
-                })
-
-    return seller_filename, rows
+    return seller, rows
 
 
-# -----------------------
-# PDF Processor
-# -----------------------
-def process_pdfs(uploaded_files):
+# ------------------------------------------------------------
+# PROCESS PDFs
+# ------------------------------------------------------------
+
+def process_pdfs(files):
     entry_date = datetime.today().strftime("%d.%m.%Y")
     data = defaultdict(list)
 
-    for uploaded in uploaded_files:
-        with fitz.open(stream=uploaded.read(), filetype="pdf") as doc:
+    for f in files:
+        with fitz.open(stream=f.read(), filetype="pdf") as doc:
             for i in range(len(doc)):
-                seller, rows = extract_from_page_text(doc.load_page(i).get_text(), entry_date)
+                seller, rows = extract_from_page_text(doc[i].get_text(), entry_date)
                 for r in rows:
-                    r["Source PDF"] = uploaded.name
+                    r["Source PDF"] = f.name
                     data[seller].append(r)
 
     seller_dfs = {}
     for seller, rows in data.items():
         df = pd.DataFrame(rows)
 
+        # DUPLICATE IGNORE LOGIC
         df.drop_duplicates(
-            subset=["Order ID", "SKU", "Size", "Qty", "Color", "AWB Number"],
-            keep="first",
+            subset=["Order ID", "SKU", "Size", "Color", "AWB Number"],
             inplace=True
         )
 
@@ -184,37 +131,143 @@ def process_pdfs(uploaded_files):
     return seller_dfs
 
 
-# -----------------------
-# Streamlit UI
-# -----------------------
-st.title("📦 PDF → Data (Meesho) — FINAL VERSION")
+# ------------------------------------------------------------
+# COURIER SUMMARY (UNIQUE AWB = PACKET)
+# ------------------------------------------------------------
 
-uploaded_files = st.file_uploader(
-    "Upload Meesho PDF files",
-    type=["pdf"],
-    accept_multiple_files=True
-)
+def courier_summary(df: pd.DataFrame):
+    summary = (
+        df[df["AWB Number"] != ""]
+        .drop_duplicates(subset=["AWB Number"])
+        .groupby("Courier")
+        .size()
+        .reset_index(name="Packets")
+    )
 
-if st.button("Process PDFs"):
-    if not uploaded_files:
-        st.warning("कृपया PDF upload करें")
-    else:
-        with st.spinner("Processing PDFs..."):
-            seller_dfs = process_pdfs(uploaded_files)
-            st.session_state["seller_dfs"] = seller_dfs
-            st.success("Processing completed successfully")
+    total = summary["Packets"].sum()
+    summary.loc[len(summary)] = ["GRAND TOTAL", total]
+    return summary
+
+
+# ------------------------------------------------------------
+# COMBINED SUMMARY (ALL SELLERS)
+# ------------------------------------------------------------
+
+def combined_summary(seller_dfs: dict):
+    combined = pd.concat(seller_dfs.values(), ignore_index=True)
+    return courier_summary(combined)
+
+
+# ------------------------------------------------------------
+# PDF REPORT
+# ------------------------------------------------------------
+
+def create_pdf(summary_tables: dict):
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for title, df in summary_tables.items():
+            fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4
+            ax.axis("off")
+            ax.table(cellText=df.values, colLabels=df.columns, loc="center")
+            plt.title(title)
+            pdf.savefig(fig)
+            plt.close()
+    buf.seek(0)
+    return buf.read()
+
+
+# ------------------------------------------------------------
+# EXCEL REPORT
+# ------------------------------------------------------------
+
+def create_excel(seller_dfs: dict):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+
+        # Combined Summary Sheet
+        combined_summary(seller_dfs).to_excel(
+            writer,
+            sheet_name="ALL_SELLERS_SUMMARY",
+            index=False
+        )
+
+        # Seller-wise sheets
+        for seller, df in seller_dfs.items():
+            df.to_excel(
+                writer,
+                sheet_name=sanitize_sheet_name(seller),
+                index=False
+            )
+
+            courier_summary(df).to_excel(
+                writer,
+                sheet_name=sanitize_sheet_name(seller, "_Summary"),
+                index=False
+            )
+
+    out.seek(0)
+    return out.read()
+
+
+# ------------------------------------------------------------
+# UI — UPLOAD (HIDE / UNHIDE)
+# ------------------------------------------------------------
+
+with st.expander("📤 Upload & Settings", expanded=True):
+    uploaded_files = st.file_uploader(
+        "Upload Meesho PDFs",
+        type=["pdf"],
+        accept_multiple_files=True
+    )
+
+    if st.button("🚀 Process PDFs"):
+        if uploaded_files:
+            st.session_state["seller_dfs"] = process_pdfs(uploaded_files)
+            st.success("Processing Completed Successfully")
+
+
+# ------------------------------------------------------------
+# DASHBOARD OUTPUT
+# ------------------------------------------------------------
 
 if "seller_dfs" in st.session_state:
-    for seller, df in st.session_state["seller_dfs"].items():
-        st.subheader(f"{seller} ({len(df)} rows)")
-        st.dataframe(df)
 
-        excel_buf = io.BytesIO()
-        df.to_excel(excel_buf, index=False)
-        excel_buf.seek(0)
+    seller_dfs = st.session_state["seller_dfs"]
 
-        st.download_button(
-            f"⬇️ Download Excel - {seller}",
-            excel_buf,
-            file_name=f"{seller}.xlsx"
-        )
+    st.markdown("---")
+    st.subheader("📦 ALL SELLERS — COMBINED COURIER SUMMARY")
+
+    combined_df = combined_summary(seller_dfs)
+    st.table(combined_df)
+
+    st.markdown("---")
+    st.subheader("🏬 Seller-wise Courier Details")
+
+    for seller, df in seller_dfs.items():
+        with st.expander(f"{seller} — Courier Summary"):
+            st.table(courier_summary(df))
+
+    st.markdown("---")
+    st.subheader("📑 Data Preview (Hide / Unhide)")
+
+    for seller, df in seller_dfs.items():
+        with st.expander(f"{seller} — Data Preview"):
+            st.dataframe(df, use_container_width=True)
+
+    st.markdown("---")
+
+    # DOWNLOADS
+    st.download_button(
+        "📊 Download Excel Report",
+        create_excel(seller_dfs),
+        file_name="Meesho_Report.xlsx"
+    )
+
+    st.download_button(
+        "📄 Download PDF Report",
+        create_pdf({"ALL SELLERS SUMMARY": combined_df}),
+        file_name="Courier_Summary.pdf",
+        mime="application/pdf"
+    )
+
+# ===================== END OF SCRIPT =====================
