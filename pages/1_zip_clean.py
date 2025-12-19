@@ -1,4 +1,5 @@
-# app.py
+# app.py - Updated with Upload area moved to main screen with Hide/Show triangle
+
 import os
 import re
 import zipfile
@@ -6,7 +7,6 @@ import tempfile
 from io import BytesIO
 from datetime import datetime
 import shutil
-
 import pandas as pd
 import streamlit as st
 
@@ -14,13 +14,13 @@ import streamlit as st
 # Page / app basic setup
 # ------------------------------
 st.set_page_config(layout="wide", page_title="Meesho Merge & Clean (Web)")
+
 st.title("📦 Meesho — Merge, Clean & Export (Web)")
 st.caption("Based on your all_in_one_marge_v2.py logic — multi-ZIP supported, A1/A3 deletion and numeric coercion preserved.")
 
 # ------------------------------
 # Utility / cleaning functions (taken from your original script)
 # ------------------------------
-
 def is_suborder_or_blank(series: pd.Series) -> pd.Series:
     is_blank = series.isna()
     s_str = series.astype(str).str.strip()
@@ -36,8 +36,8 @@ def coerce_numeric_df(df: pd.DataFrame) -> pd.DataFrame:
         original = col.copy()
         mask = original.notna()
         s = original[mask].astype(str)
-        s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
-        s = s.str.replace("\u2212", "-", regex=False).str.replace("\u2013", "-", regex=False)
+        s = s.str.replace(r"^\\((.*)\\)$", r"-\\1", regex=True)
+        s = s.str.replace("−", "-", regex=False).str.replace("–", "-", regex=False)
         s = s.str.replace(r"[₹,]", "", regex=True).str.replace(r"\s+", "", regex=True)
         nums = pd.to_numeric(s, errors="coerce")
         out = original.copy()
@@ -54,6 +54,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         cond_a1 = is_suborder_or_blank(df.iloc[:, 0])
     except Exception:
         cond_a1 = pd.Series(False, index=df.index)
+    
     if df.shape[1] >= 3:
         try:
             cond_a3 = is_suborder_or_blank(df.iloc[:, 2])
@@ -61,6 +62,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             cond_a3 = pd.Series(False, index=df.index)
     else:
         cond_a3 = pd.Series(False, index=df.index)
+    
     df = df.loc[~(cond_a1 | cond_a3)].copy()
     df = coerce_numeric_df(df)
     df.reset_index(drop=True, inplace=True)
@@ -84,7 +86,6 @@ def clean_excel_file(file_path, output_path):
 # ------------------------------
 # Main processor: multiple zips
 # ------------------------------
-
 def process_multiple_zip_files(uploaded_zip_files):
     """
     uploaded_zip_files: list of Streamlit UploadedFile objects
@@ -103,6 +104,7 @@ def process_multiple_zip_files(uploaded_zip_files):
             tmp_zip_path = os.path.join(temp_root, f"upload_{i}_{os.path.basename(up.name)}")
             with open(tmp_zip_path, "wb") as f:
                 f.write(up.getbuffer())
+            
             # extract xlsx entries
             with zipfile.ZipFile(tmp_zip_path, 'r') as zf:
                 for member in zf.namelist():
@@ -133,7 +135,7 @@ def process_multiple_zip_files(uploaded_zip_files):
     wanted_sheets = ["Order Payments", "Ads Cost", "Referral Payments"]
     merged_data = {sheet: [] for sheet in wanted_sheets}
     first_file = True
-
+    
     # try to detect number_part (like original: cleaned_(\d+)_SP)
     number_part = "UNKNOWN"
     sample_file = next((f for f in os.listdir(cleaned_dir) if f.endswith(".xlsx") and not f.startswith("~$")), None)
@@ -189,55 +191,74 @@ def process_multiple_zip_files(uploaded_zip_files):
     return buf, number_part, date_str
 
 # ------------------------------
-# Streamlit UI: Upload & Process
+# NEW: Main screen layout with collapsible upload section next to download
 # ------------------------------
+col1, col2 = st.columns([3, 1])
 
-st.sidebar.header("Upload (Multi-ZIP supported)")
-uploaded_zips = st.sidebar.file_uploader(
-    "Select one or more .zip files that contain Meesho .xlsx files",
-    type=["zip"],
-    accept_multiple_files=True
-)
-
-if not uploaded_zips:
-    st.info("कृपया ऊपर से कम-से-कम एक ZIP upload करें (multiple select supported).")
-    st.stop()
-
-# Process button to avoid auto-processing on upload (gives user control)
-if st.sidebar.button("Process uploaded ZIP(s) → Merge & Clean"):
-    with st.spinner("Processing ZIPs — extracting, cleaning and merging (यह काम सर्वर पर होता है)..."):
+with col1:
+    st.subheader("📊 Clean Excel Preview & Download")
+    if 'merged_buf' in st.session_state and st.session_state.merged_buf:
         try:
-            merged_buf, number_part, date_str = process_multiple_zip_files(uploaded_zips)
-            filename = f"{number_part}_{date_str}.xlsx"
-            st.success("Merge & Cleaning completed ✅")
-            # show download
+            xls = pd.ExcelFile(st.session_state.merged_buf)
+            if "Order Payments" in xls.sheet_names:
+                df_preview = pd.read_excel(xls, sheet_name="Order Payments", engine="openpyxl", header=None)
+            else:
+                df_preview = pd.read_excel(xls, sheet_name=xls.sheet_names[0], engine="openpyxl", header=None)
+            st.dataframe(df_preview.head(50), use_container_width=True)
+        except Exception as e:
+            st.write("Preview not available:", e)
+
+with col2:
+    # Hide/Show Upload area with triangle
+    with st.expander("⬆️ ZIP Upload (Hide/Show)", expanded=True):
+        st.markdown("**Multi-ZIP supported**")
+        uploaded_zips = st.file_uploader(
+            "Select one or more .zip files that contain Meesho .xlsx files",
+            type=["zip"],
+            accept_multiple_files=True,
+            key="main_uploader"
+        )
+
+# Process button below upload area
+if uploaded_zips:
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🚀 Process uploaded ZIP(s) → Merge & Clean", type="primary", use_container_width=True):
+            with st.spinner("Processing ZIPs — extracting, cleaning and merging (यह काम सर्वर पर होता है)..."):
+                try:
+                    merged_buf, number_part, date_str = process_multiple_zip_files(uploaded_zips)
+                    filename = f"{number_part}_{date_str}.xlsx"
+                    st.session_state.merged_buf = merged_buf
+                    st.session_state.filename = filename
+                    st.session_state.number_part = number_part
+                    st.rerun()
+                except Exception as e:
+                    st.error("Processing failed: " + str(e))
+    
+    # Download button next to process button
+    if 'merged_buf' in st.session_state and st.session_state.merged_buf:
+        with col_btn2:
             st.download_button(
-                label="⬇️ Download merged Excel (final)",
-                data=merged_buf.getvalue(),
-                file_name=filename,
+                label="⬇️ Download Clean Excel",
+                data=st.session_state.merged_buf.getvalue(),
+                file_name=st.session_state.filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-            # preview first sheet if exists
-            try:
-                xls = pd.ExcelFile(merged_buf)
-                if "Order Payments" in xls.sheet_names:
-                    df_preview = pd.read_excel(xls, sheet_name="Order Payments", engine="openpyxl", header=None)
-                else:
-                    df_preview = pd.read_excel(xls, sheet_name=xls.sheet_names[0], engine="openpyxl", header=None)
-                st.subheader("Preview — first 50 rows of merged sheet")
-                st.dataframe(df_preview.head(50), use_container_width=True)
-            except Exception as e:
-                st.write("Preview not available:", e)
-        except Exception as e:
-            st.error("Processing failed: " + str(e))
+            st.success("✅ Clean Excel तैयार है - Download करें!")
+
 else:
-    st.write("Upload ZIP(s) and click **Process uploaded ZIP(s) → Merge & Clean** to start.")
+    st.info("कृपया ऊपर के Upload क्षेत्र में ZIP files चुनें।")
+
+# ------------------------------
+# Sidebar empty now (clean look)
+# ------------------------------
+st.sidebar.markdown("### 👋 Clean Interface")
+st.sidebar.markdown("Upload अब main screen पर है!")
 
 # ------------------------------
 # Requirements note
 # ------------------------------
 st.markdown("---")
-st.markdown("**Requirements (recommended)**\n```\nstreamlit\npandas\nopenpyxl\n```")
-st.markdown("Run locally: `pip install -r requirements.txt` and then `streamlit run app.py`")
-
+st.markdown("""
+**Requirements:**
