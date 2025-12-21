@@ -15,7 +15,7 @@ st.markdown(
     """
 )
 
-# Exact column names from your CSV
+# Column names
 COL_REASON = "Reason for Credit Entry"
 COL_SUBORDER = "Sub Order No"
 COL_ORDER_DATE = "Order Date"
@@ -34,9 +34,7 @@ required_cols = [
     COL_DISC_PRICE,
 ]
 
-# -----------------------------
-# 1) CSV Upload & Merge Section
-# -----------------------------
+# 1) CSV Upload & Merge
 with st.expander("📂 CSV Upload & Merge (Multiple Files)", expanded=True):
     uploaded_files = st.file_uploader(
         "Ek ya multiple Orders CSV files upload karein",
@@ -86,9 +84,7 @@ with st.expander("📂 CSV Upload & Merge (Multiple Files)", expanded=True):
 if merged_df is None:
     st.stop()
 
-# -----------------------------
-# 2) Data Cleaning & Discount
-# -----------------------------
+# 2) Cleaning + Discount
 df = merged_df.copy()
 
 missing = [c for c in required_cols if c not in df.columns]
@@ -103,9 +99,7 @@ df[COL_DISC_PRICE] = pd.to_numeric(df[COL_DISC_PRICE], errors="coerce")
 df["Discount Amount (₹)"] = df[COL_LIST_PRICE] - df[COL_DISC_PRICE]
 df["Discount %"] = (df["Discount Amount (₹)"] / df[COL_LIST_PRICE].replace(0, pd.NA)) * 100
 
-# -----------------------------
-# 3) Global Filters (Sidebar)
-# -----------------------------
+# 3) Global Filters
 st.sidebar.header("Global Filters")
 
 min_date = df[COL_ORDER_DATE].min()
@@ -137,9 +131,7 @@ mask_sku_global = df[COL_SKU].isin(selected_skus) if selected_skus else True
 gdf = df[mask_date_global & mask_sku_global].copy()
 gdf = gdf[gdf["Discount Amount (₹)"] > 0]
 
-# -----------------------------
-# 4) Detailed Table Filters (multi-select)
-# -----------------------------
+# 4) Detailed Filters (multi-select)
 st.subheader("Detailed Discount Table Filters")
 
 col_f1, col_f2 = st.columns(2)
@@ -161,7 +153,6 @@ with col_f2:
         default=["All"],
     )
 
-# Final filtered dataframe (global + detailed filters)
 fdf = gdf.copy()
 
 if "All" not in selected_reasons:
@@ -171,9 +162,7 @@ if "All" not in selected_dates:
     sel_dates_obj = [datetime.strptime(d, "%Y-%m-%d").date() for d in selected_dates]
     fdf = fdf[fdf[COL_ORDER_DATE].dt.date.isin(sel_dates_obj)]
 
-# -----------------------------
-# 5) Filtered Data Summary (Colored, based on fdf)
-# -----------------------------
+# 5) Summary (bigger cards, based on fdf)
 st.markdown("## Filtered Data Summary")
 
 total_discount_amount = fdf["Discount Amount (₹)"].sum(skipna=True)
@@ -184,12 +173,14 @@ total_revenue_after_discount = fdf[COL_DISC_PRICE].sum(skipna=True)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 
+card_style = "background-color:{bg};padding:16px;border-radius:10px;text-align:center;"
+
 with c1:
     st.markdown(
         f"""
-        <div style="background-color:#e3f2fd;padding:10px;border-radius:8px;text-align:center;">
-        <div style="font-size:12px;color:#555;">Total Orders (Filtered)</div>
-        <div style="font-size:22px;font-weight:bold;color:#0d47a1;">{total_orders}</div>
+        <div style="{card_style.format(bg='#e3f2fd')}">
+        <div style="font-size:14px;color:#555;">Total Orders (Filtered)</div>
+        <div style="font-size:26px;font-weight:bold;color:#0d47a1;">{total_orders}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -198,9 +189,9 @@ with c1:
 with c2:
     st.markdown(
         f"""
-        <div style="background-color:#fce4ec;padding:10px;border-radius:8px;text-align:center;">
-        <div style="font-size:12px;color:#555;">Total Discount Amount</div>
-        <div style="font-size:22px;font-weight:bold;color:#880e4f;">{total_discount_amount:,.2f}</div>
+        <div style="{card_style.format(bg='#fce4ec')}">
+        <div style="font-size:14px;color:#555;">Total Discount Amount</div>
+        <div style="font-size:26px;font-weight:bold;color:#880e4f;">{total_discount_amount:,.2f}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -209,9 +200,9 @@ with c2:
 with c3:
     st.markdown(
         f"""
-        <div style="background-color:#e8f5e9;padding:10px;border-radius:8px;text-align:center;">
-        <div style="font-size:12px;color:#555;">Average Discount (%)</div>
-        <div style="font-size:22px;font-weight:bold;color:#1b5e20;">{avg_discount_percent:,.2f}</div>
+        <div style="{card_style.format(bg='#e8f5e9')}">
+        <div style="font-size:14px;color:#555;">Average Discount (%)</div>
+        <div style="font-size:26px;font-weight:bold;color:#1b5e20;">{avg_discount_percent:,.2f}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -220,9 +211,9 @@ with c3:
 with c4:
     st.markdown(
         f"""
-        <div style="background-color:#fff3e0;padding:10px;border-radius:8px;text-align:center;">
-        <div style="font-size:12px;color:#555;">Rows With Discount</div>
-        <div style="font-size:22px;font-weight:bold;color:#e65100;">{int(total_rows_with_discount)}</div>
+        <div style="{card_style.format(bg='#fff3e0')}">
+        <div style="font-size:14px;color:#555;">Rows With Discount</div>
+        <div style="font-size:26px;font-weight:bold;color:#e65100;">{int(total_rows_with_discount)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -231,9 +222,9 @@ with c4:
 with c5:
     st.markdown(
         f"""
-        <div style="background-color:#ede7f6;padding:10px;border-radius:8px;text-align:center;">
-        <div style="font-size:12px;color:#555;">Revenue After Discount</div>
-        <div style="font-size:22px;font-weight:bold;color:#311b92;">{total_revenue_after_discount:,.2f}</div>
+        <div style="{card_style.format(bg='#ede7f6')}">
+        <div style="font-size:14px;color:#555;">Revenue After Discount</div>
+        <div style="font-size:26px;font-weight:bold;color:#311b92;">{total_revenue_after_discount:,.2f}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -241,15 +232,13 @@ with c5:
 
 st.markdown("---")
 
-# -----------------------------
-# 6) Detailed Discount Table
-# -----------------------------
+# 6) Detailed Table (screen par full info, PDF ke liye alag selection)
 st.subheader("Detailed Discount Table (Only Discount > 0)")
 
 fdf["Discount Amount (₹)"] = fdf["Discount Amount (₹)"].round(2)
 fdf["Discount %"] = fdf["Discount %"].round(2)
 
-display_cols = [
+display_cols_full = [
     COL_REASON,
     COL_SUBORDER,
     COL_ORDER_DATE,
@@ -261,50 +250,53 @@ display_cols = [
     "Discount %",
 ]
 
-st.dataframe(fdf[display_cols], use_container_width=True)
+st.dataframe(fdf[display_cols_full], use_container_width=True)
 
-# -----------------------------
-# 7) Download Detailed Table as PDF
-# -----------------------------
+# 7) PDF – sirf Sub Order No, SKU, Discount %
 st.markdown("---")
-st.subheader("Download Detailed Table as PDF")
+st.subheader("Download PDF (Sub Order No, SKU, Discount %)")
+
+pdf_cols = [COL_SUBORDER, COL_SKU, "Discount %"]
+pdf_df = fdf[pdf_cols].copy()
 
 def df_to_pdf(dataframe: pd.DataFrame) -> bytes:
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=10)
 
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Discount Report", ln=1, align="C")
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 12, "Discount Report (Sub Order, SKU, Discount %)", ln=1, align="C")
 
-    pdf.set_font("Arial", size=8)
+    pdf.set_font("Arial", size=10)
 
     max_width = 280
     num_cols = len(dataframe.columns)
     col_width = max_width / num_cols
 
-    # Header row
+    # Header
     for col in dataframe.columns:
         header_txt = str(col).replace("₹", "INR")
-        pdf.cell(col_width, 8, header_txt[:25], border=1)
-    pdf.ln(8)
+        pdf.cell(col_width, 10, header_txt[:30], border=1, align="C")
+    pdf.ln(10)
 
-    # Data rows
+    # Rows
     for _, row in dataframe.iterrows():
         for col in dataframe.columns:
-            txt = str(row[col])
-            txt = txt.replace("₹", "INR")
-            if len(txt) > 25:
-                txt = txt[:22] + "..."
-            pdf.cell(col_width, 6, txt, border=1)
-        pdf.ln(6)
+            txt = str(row[col]).replace("₹", "INR")
+            if len(txt) > 30:
+                txt = txt[:27] + "..."
+            pdf.cell(col_width, 8, txt, border=1)
+        pdf.ln(8)
 
-    return pdf.output(dest="S").encode("latin-1", "ignore")
+    out = pdf.output(dest="S")
+    if isinstance(out, str):
+        return out.encode("latin-1", "ignore")
+    return out
 
-if not fdf.empty:
-    pdf_bytes = df_to_pdf(fdf[display_cols])
+if not pdf_df.empty:
+    pdf_bytes = df_to_pdf(pdf_df)
     st.download_button(
-        label="Download Table as PDF",
+        label="Download PDF (Sub Order No, SKU, Discount %)",
         data=pdf_bytes,
         file_name=f"discount_table_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
         mime="application/pdf",
