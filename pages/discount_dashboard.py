@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from fpdf import FPDF
+from io import BytesIO
 
 st.set_page_config(page_title="Supplier Discount Analysis", layout="wide")
 
@@ -232,7 +233,7 @@ with c5:
 
 st.markdown("---")
 
-# 6) Detailed Table (screen par full info, PDF ke liye alag selection)
+# 6) Detailed Table (screen par)
 st.subheader("Detailed Discount Table (Only Discount > 0)")
 
 fdf["Discount Amount (₹)"] = fdf["Discount Amount (₹)"].round(2)
@@ -265,7 +266,7 @@ def df_to_pdf(dataframe: pd.DataFrame) -> bytes:
     pdf.set_auto_page_break(auto=True, margin=10)
 
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 12, "Discount Report (Sub Order, SKU, Discount %)", ln=1, align="C")
+    pdf.cell(0, 12, "Discount Report (Sub Order No, SKU, Discount %)", ln=1, align="C")
 
     pdf.set_font("Arial", size=10)
 
@@ -288,16 +289,18 @@ def df_to_pdf(dataframe: pd.DataFrame) -> bytes:
             pdf.cell(col_width, 8, txt, border=1)
         pdf.ln(8)
 
-    out = pdf.output(dest="S")
-    if isinstance(out, str):
-        return out.encode("latin-1", "ignore")
-    return out
+    pdf_bytes = pdf.output(dest="S")
+    if isinstance(pdf_bytes, str):
+        pdf_bytes = pdf_bytes.encode("latin-1", "ignore")
+    return pdf_bytes
 
 if not pdf_df.empty:
     pdf_bytes = df_to_pdf(pdf_df)
+    buffer = BytesIO(pdf_bytes)
+
     st.download_button(
         label="Download PDF (Sub Order No, SKU, Discount %)",
-        data=pdf_bytes,
+        data=buffer,
         file_name=f"discount_table_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
         mime="application/pdf",
     )
