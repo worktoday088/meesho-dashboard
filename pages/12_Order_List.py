@@ -1,8 +1,8 @@
 # coding: utf-8
-
 import streamlit as st
 import pandas as pd
-import unicodedata, re
+import unicodedata
+import re
 from io import BytesIO
 from typing import List, Tuple, Dict
 from dataclasses import dataclass
@@ -13,22 +13,18 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 
 st.set_page_config(page_title='SKU Processor', layout='wide')
 
-# ---------------- Color Lists ----------------
-
-COMPOUND_COLORS: List[str] = ['WHITE-RED','WHITE-BLUE','BLACK-YELLOW','BLACK-RED']
-COLOR_LIST: List[str] = [
-*COMPOUND_COLORS,
-'BLACK','WHITE','GREY','PINK','PURPLE','WINE','BOTTLE GREEN','PEACH','CREAM','BROWN',
-'BLUE','RED','YELLOW','NAVY','NAVY BLUE','PETROL','MUSTARD','MAROON','OLIVE','SKY BLUE',
-'ORANGE','BEIGE','FUCHSIA','MAGENTA','SEA GREEN','TEAL','TURQUOISE','VIOLET','OFF WHITE',
-'GOLD','SILVER','CHARCOAL','RUST','MINT','LAVENDER','BURGUNDY','KHAKI','CAMEL','IVORY',
-'CORAL','COPPER','MULTICOLOR','GREEN','DARK GREEN','LIGHT GREEN','DARK BLUE','LIGHT BLUE',
-'DARK GREY','LIGHT GREY','SKIN','STONE','MEHANDI'
+COMPOUND_COLORS = ['WHITE-RED','WHITE-BLUE','BLACK-YELLOW','BLACK-RED']
+COLOR_LIST = [
+    *COMPOUND_COLORS,
+    'BLACK','WHITE','GREY','PINK','PURPLE','WINE','BOTTLE GREEN','PEACH','CREAM','BROWN',
+    'BLUE','RED','YELLOW','NAVY','NAVY BLUE','PETROL','MUSTARD','MAROON','OLIVE','SKY BLUE',
+    'ORANGE','BEIGE','FUCHSIA','MAGENTA','SEA GREEN','TEAL','TURQUOISE','VIOLET','OFF WHITE',
+    'GOLD','SILVER','CHARCOAL','RUST','MINT','LAVENDER','BURGUNDY','KHAKI','CAMEL','IVORY',
+    'CORAL','COPPER','MULTICOLOR','GREEN','DARK GREEN','LIGHT GREEN','DARK BLUE','LIGHT BLUE',
+    'DARK GREY','LIGHT GREY','SKIN','STONE','MEHANDI'
 ]
 
-# ---------------- Helpers ----------------
-
-def normalize(s: str) -> str:
+def normalize(s):
     if pd.isna(s):
         return ''
     s = unicodedata.normalize('NFKD', str(s)).encode('ascii','ignore').decode('ascii')
@@ -38,12 +34,10 @@ def normalize(s: str) -> str:
     s = ' '.join(s.split()).lower()
     return s
 
-def key(s: str) -> str:
+def key(s):
     return normalize(s).replace(' ', '')
 
-# --- Grand Total Helpers ---
-
-def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
+def add_right_grand_total_column(df):
     if df.empty:
         return df
     non_num = ['Style ID','Size','Color']
@@ -53,7 +47,7 @@ def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
     out['Grand Total'] = out[num_cols].sum(axis=1)
     return out
 
-def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.DataFrame:
+def add_bottom_total_row(df, label_col='Style ID'):
     if df.empty:
         return df
     out = df.copy()
@@ -70,14 +64,12 @@ def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.Da
     out = pd.concat([out, pd.DataFrame([total_row], columns=out.columns)], ignore_index=True)
     return out
 
-# --- Safe utilities: prevent errors on empty data ---
-
-def safe_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
+def safe_df_for_display(df):
     if df is None or df.empty or df.shape[1] == 0:
         return pd.DataFrame([{'Message': 'No data available'}])
     return df
 
-def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
+def to_excel_bytes(sheets):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as w:
         for name, d in sheets.items():
@@ -85,7 +77,7 @@ def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             dd.to_excel(w, index=False, sheet_name=name[:31])
     return buf.getvalue()
 
-def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
+def df_to_pdf_bytes(title, df):
     dd = safe_df_for_display(df)
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18, leftMargin=18, topMargin=24, bottomMargin=24)
@@ -111,9 +103,7 @@ def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
     doc.build(elems)
     return buf.getvalue()
 
-# ---------------- Style Inference ----------------
-
-def derive_style_id_default(row: pd.Series) -> str:
+def derive_style_id_default(row):
     txt = f"{row.get('SKU','')} {row.get('Product Name','')}"
     tnorm = normalize(txt)
     tkey = key(txt)
@@ -138,8 +128,8 @@ class StyleRule:
     patterns: list
     style_name: str
 
-def parse_user_style_mapping(text: str) -> List[StyleRule]:
-    rules: List[StyleRule] = []
+def parse_user_style_mapping(text):
+    rules = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith('#') or '=>' not in line:
@@ -151,7 +141,7 @@ def parse_user_style_mapping(text: str) -> List[StyleRule]:
             rules.append(StyleRule(patterns=pats, style_name=style_name))
     return rules
 
-def derive_style_id_with_user_rules(row: pd.Series, user_rules: List[StyleRule], fallback=True) -> str:
+def derive_style_id_with_user_rules(row, user_rules, fallback=True):
     txt = f"{row.get('SKU','')} {row.get('Product Name','')}"
     tkey = key(txt)
     for rule in user_rules:
@@ -161,10 +151,10 @@ def derive_style_id_with_user_rules(row: pd.Series, user_rules: List[StyleRule],
         return derive_style_id_default(row)
     return ''
 
-def extract_color_from_row(row: pd.Series) -> str:
+def extract_color_from_row(row):
     all_text = f"{row.get('SKU','')} {row.get('Product Name','')}"
     t = key(all_text)
-    found: List[str] = []
+    found = []
     for comp in COMPOUND_COLORS:
         if key(comp) in t:
             found.append(comp)
@@ -179,17 +169,15 @@ def extract_color_from_row(row: pd.Series) -> str:
             if col.upper() in compound_components:
                 continue
             found.append(col)
-    seen=set()
-    unique=[]
+    seen = set()
+    unique = []
     for c in found:
         if c not in seen:
             unique.append(c)
             seen.add(c)
     return ', '.join(unique)
 
-# ---------------- Read & Merge ----------------
-
-def read_one(upload) -> pd.DataFrame:
+def read_one(upload):
     name = upload.name.lower()
     try:
         if name.endswith(('.xlsx','.xls')):
@@ -199,14 +187,14 @@ def read_one(upload) -> pd.DataFrame:
         upload.seek(0)
         return pd.read_csv(upload, encoding='latin1', on_bad_lines='skip')
 
-def drop_header_like_rows(df: pd.DataFrame, header_cols: List[str]) -> pd.DataFrame:
+def drop_header_like_rows(df, header_cols):
     try:
         mask = (df.astype(str).apply(lambda r: list(r.values), axis=1).astype(str) == str(header_cols))
         return df.loc[~mask].copy()
     except Exception:
         return df
 
-def merge_files(files) -> pd.DataFrame:
+def merge_files(files):
     base = None
     for f in files:
         cur = read_one(f)
@@ -222,16 +210,14 @@ def merge_files(files) -> pd.DataFrame:
             base = pd.concat([base, cur], ignore_index=True)
     return base if base is not None else pd.DataFrame()
 
-# ---------------- Filtering ----------------
-
-def filter_by_status(df: pd.DataFrame, statuses: List[str]) -> pd.DataFrame:
+def filter_by_status(df, statuses):
     if 'Reason for Credit Entry' not in df.columns:
         return df
     if not statuses:
         return df.iloc[0:0]
     return df[df['Reason for Credit Entry'].isin(statuses)].copy()
 
-def filter_by_packetid(df: pd.DataFrame, packet_ids: List[str]) -> pd.DataFrame:
+def filter_by_packetid(df, packet_ids):
     if 'Packet Id' not in df.columns:
         return df
     if not packet_ids:
@@ -243,9 +229,7 @@ def filter_by_packetid(df: pd.DataFrame, packet_ids: List[str]) -> pd.DataFrame:
     combined_mask = mask_selected | mask_blank if 'Blank' in packet_ids else mask_selected
     return df[combined_mask].copy()
 
-# ---------------- Pivots ----------------
-
-def master_pivot(df: pd.DataFrame) -> pd.DataFrame:
+def master_pivot(df):
     if df.empty:
         return pd.DataFrame()
     sub = df.copy()
@@ -269,8 +253,8 @@ def master_pivot(df: pd.DataFrame) -> pd.DataFrame:
         pv = pd.concat([data_rows, total_rows], ignore_index=True)
     return pv
 
-def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
-    out: List[Tuple[str, pd.DataFrame]] = []
+def stylewise_pivots(df):
+    out = []
     if df.empty or 'Style ID' not in df.columns:
         return out
     styles = df['Style ID'].dropna().astype(str).unique().tolist()
@@ -296,21 +280,15 @@ def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
         out.append((s, pv))
     return out
 
-# ---------------- UI helper: Multiselect with in-list "Select All" ----------------
-
-def multiselect_with_select_all(label: str, options: List[str], default: List[str] = None, key: str = None) -> List[str]:
+def multiselect_with_select_all(label, options, default=None, key=None):
     sentinel_all = '— Select All —'
     shown_options = [sentinel_all] + options
     default = default or []
-    # यदि default सभी विकल्प हैं तो Select All भी दिखे
     default_shown = ([sentinel_all] + options) if set(default) == set(options) and options else default
     picked = st.multiselect(label, options=shown_options, default=default_shown, key=key)
     if sentinel_all in picked:
-        # केवल Select All चुना या Select All सहित चुना = सभी विकल्प select
         return options.copy()
     return [x for x in picked if x != sentinel_all]
-
-# ---------------- App ----------------
 
 def main():
     st.title('Order List Dashboard (In-Filter Select All + Blank Packet Id + Safe Gating + Grand Totals)')
@@ -367,7 +345,6 @@ def main():
                     axis=1  
                 )  
 
-    # -------- Packet Id + Order Date Filters (in-filter Select All) --------
     st.subheader('Packet Id / Order Date Filters')
     col_pkt, col_od = st.columns(2)
 
@@ -392,7 +369,6 @@ def main():
             st.warning('Order Date कॉलम नहीं मिला।')
             sel_order_dates = []
 
-    # -------- Reason for Credit Entry Filter (in-filter Select All) --------  
     st.subheader('Reason for Credit Entry Filter')  
     if 'Reason for Credit Entry' in df.columns:  
         all_status = sorted(df['Reason for Credit Entry'].dropna().astype(str).unique().tolist())  
@@ -401,7 +377,6 @@ def main():
         st.warning('Reason for Credit Entry कॉलम नहीं मिला।')  
         sel_status = []  
 
-    # Gate: require all three filters to proceed  
     filters_ready = bool(sel_packets) and bool(sel_status) and bool(sel_order_dates)  
     if not filters_ready:  
         st.warning('रिपोर्ट देखने से पहले कृपया तीनों फ़िल्टर चुनें: Packet Id, Order Date और Reason for Credit Entry. ड्रॉपडाउन के अंदर सबसे ऊपर "— Select All —" से एक क्लिक में सभी चुन सकते हैं।')  
@@ -409,17 +384,14 @@ def main():
             st.write('जब तक तीनों फ़िल्टर खाली हैं, डेटा सारांश और डाउनलोड रोके गए हैं ताकि कोई त्रुटि न दिखे। पहले Packet Id चुनें, फिर Order Date, फिर Reason चुनें।')  
         return  
 
-    # Apply filters only when ready  
     df_filtered = filter_by_packetid(df, sel_packets)  
     df_filtered = filter_by_status(df_filtered, sel_status)
     
-    # Order Date filter
     if 'Order Date' in df_filtered.columns and sel_order_dates:
         df_filtered = df_filtered[df_filtered['Order Date'].astype(str).isin(sel_order_dates)]
 
     with st.spinner('Building pivots...'):  
         pv_master = master_pivot(df_filtered)  
-        # Master Pivot में सिर्फ pivot_table का Grand Total रहेगा, extra helpers नहीं
         pv_styles = stylewise_pivots(df_filtered)  
 
     tab1, tab2, tab3, tab4 = st.tabs(['Data', 'Master Pivot', 'Style-wise Pivots', 'Master List'])  
@@ -477,7 +449,6 @@ def main():
             st.download_button('Download Master List (PDF)', data=m_pdf,  
                                file_name='Master_List.pdf', mime='application/pdf')  
 
-    # All sheets bundle  
     sheets = {'Data_Filtered': df_filtered, 'Pivot_Master': pv_master}  
     for s, pv in pv_styles:  
         sheets[f'Pivot_{s}'] = pv  
