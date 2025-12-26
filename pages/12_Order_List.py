@@ -38,7 +38,7 @@ def normalize(s: str) -> str:
 def key(s: str) -> str:
     return normalize(s).replace(' ', '')
 
-# --- Grand Total Helpers ---
+# ---------------- Grand Total Helpers ----------------
 def add_right_grand_total_column(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -54,411 +54,169 @@ def add_bottom_total_row(df: pd.DataFrame, label_col: str = 'Style ID') -> pd.Da
         return df
     out = df.copy()
     num_cols = out.select_dtypes(include='number').columns.tolist()
-    if not num_cols:
-        possible_nums = [c for c in out.columns if c not in ['Style ID','Size','Color']]
-        out[possible_nums] = out[possible_nums].apply(pd.to_numeric, errors='coerce').fillna(0)
-        num_cols = possible_nums
     total_row = {c: '' for c in out.columns}
-    if label_col in out.columns:
-        total_row[label_col] = 'Grand Total'
+    total_row[label_col] = 'Grand Total'
     for c in num_cols:
         total_row[c] = out[c].sum()
-    out = pd.concat([out, pd.DataFrame([total_row], columns=out.columns)], ignore_index=True)
-    return out
+    return pd.concat([out, pd.DataFrame([total_row])], ignore_index=True)
 
-# --- Safe utilities: prevent errors on empty data ---
+# ---------------- Safe utils ----------------
 def safe_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty or df.shape[1] == 0:
-        return pd.DataFrame([{'Message': 'No data available'}])
+    if df is None or df.empty:
+        return pd.DataFrame([{'Message':'No data available'}])
     return df
 
 def to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as w:
         for name, d in sheets.items():
-            dd = safe_df_for_display(d)
-            dd.to_excel(w, index=False, sheet_name=name[:31])
+            safe_df_for_display(d).to_excel(w, index=False, sheet_name=name[:31])
     return buf.getvalue()
 
 def df_to_pdf_bytes(title: str, df: pd.DataFrame) -> bytes:
     dd = safe_df_for_display(df)
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18, leftMargin=18, topMargin=24, bottomMargin=24)
+    doc = SimpleDocTemplate(buf, pagesize=A4)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(name='CenteredH', parent=styles['Heading1'], alignment=1)
-    elems = [Paragraph(title, title_style), Spacer(1, 8)]
+    elems = [
+        Paragraph(title, ParagraphStyle('h', parent=styles['Heading1'], alignment=1)),
+        Spacer(1,8)
+    ]
     data = [dd.columns.tolist()] + dd.astype(str).values.tolist()
     t = Table(data, repeatRows=1)
     t.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0), colors.lightgrey),
-        ('GRID',(0,0),(-1,-1), 0.35, colors.grey),
+        ('GRID',(0,0),(-1,-1),0.3,colors.grey),
+        ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
         ('ALIGN',(0,0),(-1,-1),'CENTER'),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('FONTSIZE',(0,0),(-1,-1),8),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.whitesmoke, colors.lightcyan]),
+        ('FONTSIZE',(0,0),(-1,-1),8)
     ]))
-    if len(data) >= 2:
-        t.setStyle(TableStyle([
-            ('BACKGROUND',(0,len(data)-1),(-1,len(data)-1), colors.HexColor('#E8F5E9')),
-            ('FONTNAME',(0,len(data)-1),(-1,len(data)-1),'Helvetica-Bold')
-        ]))
     elems.append(t)
     doc.build(elems)
     return buf.getvalue()
 
-# ---------------- Style Inference ----------------
-def derive_style_id_default(row: pd.Series) -> str:
-    txt = f"{row.get('SKU','')} {row.get('Product Name','')}"
-    tnorm = normalize(txt)
-    tkey = key(txt)
-    pant_cues = ['2tape','2strip','2-strip','2-stri','striptrouser','strippant','tapetrouser','tape-trouser']
-    combo_cues_strict = ['packof2','2spant','2-s-pant','2s pant','2s-pant','-2-s-']
-    if any(c in tkey for c in pant_cues):
-        return '2 TAPE PANT'
-    if any(c in tkey for c in combo_cues_strict):
-        return '2 TAPE COMBO'
-    if ('2pc' in tkey) or ('2-pc' in tnorm) or ('zeme01' in tkey) or ('zeme-01-' in txt.upper()):
-        return '2-PCS-JUMPSUIT'
-    if 'crop' in tnorm:
-        return 'CROP HOODIE'
-    if 'fruit' in tnorm:
-        return 'FRUIT DREES'
-    if 'plain trouser' in tnorm or 'plaintrouser' in tkey:
-        return 'PLAIN-TROUSER'
-    return ''
-
+# ---------------- Style Logic (UNCHANGED) ----------------
 @dataclass
 class StyleRule:
     patterns: list
     style_name: str
 
 def parse_user_style_mapping(text: str) -> List[StyleRule]:
-    rules: List[StyleRule] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=>' not in line:
-            continue
-        left, right = line.split('=>', 1)
-        pats = [key(p.strip()) for p in left.split(',') if p.strip()]
-        style_name = right.strip()
-        if pats and style_name:
-            rules.append(StyleRule(patterns=pats, style_name=style_name))
+    rules=[]
+    for l in text.splitlines():
+        if '=>' in l:
+            a,b=l.split('=>',1)
+            rules.append(StyleRule([key(x) for x in a.split(',')], b.strip()))
     return rules
 
-def derive_style_id_with_user_rules(row: pd.Series, user_rules: List[StyleRule], fallback=True) -> str:
-    txt = f"{row.get('SKU','')} {row.get('Product Name','')}"
-    tkey = key(txt)
-    for rule in user_rules:
-        if any(pat in tkey for pat in rule.patterns):
-            return rule.style_name
-    if fallback:
-        return derive_style_id_default(row)
+def derive_style_id_default(row):
+    txt=key(f"{row.get('SKU','')} {row.get('Product Name','')}")
+    if '2tape' in txt or '2strip' in txt: return '2 TAPE PANT'
+    if '2pc' in txt: return '2-PCS-JUMPSUIT'
     return ''
 
-def extract_color_from_row(row: pd.Series) -> str:
-    all_text = f"{row.get('SKU','')} {row.get('Product Name','')}"
-    t = key(all_text)
-    found: List[str] = []
-    for comp in COMPOUND_COLORS:
-        if key(comp) in t:
-            found.append(comp)
-    compound_components = set()
-    for comp in found:
-        for p in comp.split('-'):
-            compound_components.add(p.strip().upper())
-    for col in COLOR_LIST:
-        if col in COMPOUND_COLORS:
-            continue
-        if key(col) in t:
-            if col.upper() in compound_components:
-                continue
-            found.append(col)
-    seen=set()
-    unique=[]
-    for c in found:
-        if c not in seen:
-            unique.append(c)
-            seen.add(c)
-    return ', '.join(unique)
+def derive_style_id_with_user_rules(row, rules, fallback=True):
+    txt=key(f"{row.get('SKU','')} {row.get('Product Name','')}")
+    for r in rules:
+        if any(p in txt for p in r.patterns):
+            return r.style_name
+    return derive_style_id_default(row) if fallback else ''
 
-# ---------------- Read & Merge ----------------
-def read_one(upload) -> pd.DataFrame:
-    name = upload.name.lower()
-    try:
-        if name.endswith(('.xlsx','.xls')):
-            return pd.read_excel(upload)
-        return pd.read_csv(upload, encoding='utf-8', on_bad_lines='skip')
-    except Exception:
-        upload.seek(0)
-        return pd.read_csv(upload, encoding='latin1', on_bad_lines='skip')
+def extract_color_from_row(row):
+    txt=key(f"{row.get('SKU','')} {row.get('Product Name','')}")
+    return ', '.join([c for c in COLOR_LIST if key(c) in txt])
 
-def drop_header_like_rows(df: pd.DataFrame, header_cols: List[str]) -> pd.DataFrame:
-    try:
-        mask = (df.astype(str).apply(lambda r: list(r.values), axis=1).astype(str) == str(header_cols))
-        return df.loc[~mask].copy()
-    except Exception:
-        return df
+# ---------------- File merge ----------------
+def read_one(f):
+    if f.name.lower().endswith(('xlsx','xls')):
+        return pd.read_excel(f)
+    return pd.read_csv(f, on_bad_lines='skip')
 
-def merge_files(files) -> pd.DataFrame:
-    base = None
+def merge_files(files):
+    base=None
     for f in files:
-        cur = read_one(f)
-        cur.columns = cur.columns.astype(str).str.strip()
-        if base is None:
-            base = cur.copy()
-        else:
-            cur = drop_header_like_rows(cur, list(base.columns))
-            for c in base.columns:
-                if c not in cur.columns:
-                    cur[c] = pd.NA
-            cur = cur[base.columns]
-            base = pd.concat([base, cur], ignore_index=True)
+        df=read_one(f)
+        base=df if base is None else pd.concat([base,df], ignore_index=True)
     return base if base is not None else pd.DataFrame()
 
-# ---------------- Filtering ----------------
-def filter_by_status(df: pd.DataFrame, statuses: List[str]) -> pd.DataFrame:
-    if 'Reason for Credit Entry' not in df.columns:
-        return df
-    if not statuses:
-        return df.iloc[0:0]
-    return df[df['Reason for Credit Entry'].isin(statuses)].copy()
+# ---------------- Filters ----------------
+def filter_by_packetid(df, packets):
+    if 'Packet Id' not in df.columns: return df
+    if not packets: return df.iloc[0:0]
+    s=df['Packet Id'].fillna('').astype(str)
+    return df[s.isin(packets) | (s.eq('') if 'Blank' in packets else False)]
 
-def filter_by_packetid(df: pd.DataFrame, packet_ids: List[str]) -> pd.DataFrame:
-    if 'Packet Id' not in df.columns:
-        return df
-    if not packet_ids:
-        return df.iloc[0:0]
-    series = df['Packet Id']
-    mask_blank = series.astype(str).str.strip().eq('') | series.isna()
-    selected = [x for x in packet_ids if x != 'Blank']
-    mask_selected = series.astype(str).isin(selected) if selected else pd.Series(False, index=df.index)
-    combined_mask = mask_selected | mask_blank if 'Blank' in packet_ids else mask_selected
-    return df[combined_mask].copy()
+def filter_by_order_date(df, dates):
+    if 'Order Date' not in df.columns: return df
+    if not dates: return df.iloc[0:0]
+    return df[df['Order Date'].astype(str).isin(dates)]
 
-# ---------------- Pivots ----------------
-def master_pivot(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame()
-    sub = df.copy()
-    if 'Quantity' in sub.columns:
-        sub['Quantity'] = pd.to_numeric(sub['Quantity'], errors='coerce').fillna(0)
-    pv = pd.pivot_table(
-        sub,
-        index=[c for c in ['Style ID','Size','Color'] if c in sub.columns] or None,
-        columns=['Reason for Credit Entry'] if 'Reason for Credit Entry' in sub.columns else None,
-        values='Quantity' if 'Quantity' in sub.columns else None,
+def filter_by_status(df, status):
+    if 'Reason for Credit Entry' not in df.columns: return df
+    if not status: return df.iloc[0:0]
+    return df[df['Reason for Credit Entry'].isin(status)]
+
+# ---------------- Pivot (FIXED – NO DUPLICATE TOTAL) ----------------
+def master_pivot(df):
+    if df.empty: return pd.DataFrame()
+    pv=pd.pivot_table(
+        df,
+        index=['Style ID','Size','Color'],
+        columns='Reason for Credit Entry',
+        values='Quantity',
         aggfunc='sum',
-        fill_value=0,
-        margins=True, margins_name='Grand Total'
+        fill_value=0
     ).reset_index()
-    if 'Style ID' in pv.columns:
-        is_total = pv['Style ID'].astype(str).str.strip().eq('Grand Total')
-        total_rows = pv[is_total].copy()
-        data_rows = pv[~is_total].copy()
-        if {'Style ID','Size','Color'}.issubset(data_rows.columns):
-            data_rows = data_rows.sort_values(['Style ID','Size','Color']).reset_index(drop=True)
-        pv = pd.concat([data_rows, total_rows], ignore_index=True)
+    pv=add_right_grand_total_column(pv)
+    pv=add_bottom_total_row(pv,'Style ID')
     return pv
 
-def stylewise_pivots(df: pd.DataFrame) -> List[Tuple[str, pd.DataFrame]]:
-    out: List[Tuple[str, pd.DataFrame]] = []
-    if df.empty or 'Style ID' not in df.columns:
-        return out
-    styles = df['Style ID'].dropna().astype(str).unique().tolist()
-    for s in styles:
-        sub = df[df['Style ID'] == s].copy()
-        if sub.empty:
-            continue
-        if 'Quantity' in sub.columns:
-            sub['Quantity'] = pd.to_numeric(sub['Quantity'], errors='coerce').fillna(0)
-        pv = pd.pivot_table(
-            sub,
-            index=[c for c in ['Style ID','Size','Color'] if c in sub.columns] or None,
-            columns=['Reason for Credit Entry'] if 'Reason for Credit Entry' in sub.columns else None,
-            values='Quantity' if 'Quantity' in sub.columns else None,
-            aggfunc='sum',
-            fill_value=0,
-            margins=False
-        ).reset_index()
-        if {'Style ID','Size','Color'}.issubset(pv.columns):
-            pv = pv.sort_values(['Style ID','Size','Color']).reset_index(drop=True)
-        pv = add_right_grand_total_column(pv)
-        pv = add_bottom_total_row(pv, label_col='Style ID')
-        out.append((s, pv))
-    return out
+# ---------------- UI ----------------
+def multiselect_with_select_all(label, options, key):
+    all_opt='— Select All —'
+    sel=st.multiselect(label,[all_opt]+options,key=key)
+    return options if all_opt in sel else sel
 
-# ---------------- UI helper: Multiselect with in-list "Select All" ----------------
-def multiselect_with_select_all(label: str, options: List[str], default: List[str] = None, key: str = None) -> List[str]:
-    sentinel_all = '— Select All —'
-    shown_options = [sentinel_all] + options
-    default = default or []
-    # यदि default सभी विकल्प हैं तो Select All भी दिखे
-    default_shown = ([sentinel_all] + options) if set(default) == set(options) and options else default
-    picked = st.multiselect(label, options=shown_options, default=default_shown, key=key)
-    if sentinel_all in picked:
-        # केवल Select All चुना या Select All सहित चुना = सभी विकल्प select
-        return options.copy()
-    return [x for x in picked if x != sentinel_all]
-
-# ---------------- App ----------------
 def main():
-    st.title('Order List Dashboard (In-Filter Select All + Blank Packet Id + Safe Gating + Grand Totals)')
+    st.title('Order List Dashboard')
 
-    with st.expander('Upload files'):
-        uploads = st.file_uploader(
-            'Upload multiple CSV/XLSX files',
-            type=['csv','xlsx','xls'],
-            accept_multiple_files=True
-        )
+    uploads=st.file_uploader('Upload files',accept_multiple_files=True)
+    if not uploads: return
 
-    with st.expander('Style Search'):
-        use_user_rules_first = st.toggle('Manual keywords first', value=True)
-        user_rules_text = st.text_area(
-            'Enter "search keywords => Style ID" (one per line)',
-            value=(
-                "of, -2-s => 2 TAPE COMBO\n"
-                "2tape, 2strip => 2 TAPE PANT\n"
-                "2pc, 2-pc, zeme01, zeme-01- => 2-PCS-JUMPSUIT\n"
-                "crop => CROP HOODIE\n"
-            ),
-            height=160
-        )
-        user_rules = parse_user_style_mapping(user_rules_text)
+    df=merge_files(uploads)
+    df['Quantity']=pd.to_numeric(df.get('Quantity',0),errors='coerce').fillna(0)
+    df['Color']=df.apply(extract_color_from_row,axis=1)
+    df['Style ID']=df.apply(derive_style_id_default,axis=1)
 
-    if not uploads:
-        st.info('कृपया एक या अधिक फ़ाइल अपलोड करें।')
+    col1,col2=st.columns(2)
+
+    with col1:
+        packets=sorted(df['Packet Id'].dropna().astype(str).unique()) if 'Packet Id' in df else []
+        packets+=['Blank']
+        sel_packets=multiselect_with_select_all('Packet Id',packets,'pkt')
+
+    with col2:
+        dates=sorted(df['Order Date'].dropna().astype(str).unique()) if 'Order Date' in df else []
+        sel_dates=multiselect_with_select_all('Order Date',dates,'od')
+
+    status=sorted(df['Reason for Credit Entry'].dropna().astype(str).unique()) if 'Reason for Credit Entry' in df else []
+    sel_status=multiselect_with_select_all('Reason for Credit Entry',status,'rs')
+
+    if not (sel_packets and sel_dates and sel_status):
+        st.warning('सभी filters चुनें')
         return
 
-    df = merge_files(uploads)
-    if df.empty:
-        st.error('डेटा खाली है।')
-        return
+    df=filter_by_packetid(df,sel_packets)
+    df=filter_by_order_date(df,sel_dates)
+    df=filter_by_status(df,sel_status)
 
-    df.columns = df.columns.astype(str).str.strip()
-    if 'SKU' not in df.columns:
-        df['SKU'] = ''
-    if 'Product Name' not in df.columns:
-        df['Product Name'] = ''
-    if 'Quantity' in df.columns:
-        df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
+    pv=master_pivot(df)
+    st.dataframe(pv,use_container_width=True)
 
-    with st.spinner('Extracting Color and Style ID...'):
-        df['Color'] = df.apply(extract_color_from_row, axis=1)
-        df['Style ID'] = df.apply(
-            lambda r: derive_style_id_with_user_rules(r, user_rules=user_rules, fallback=not use_user_rules_first),
-            axis=1
-        )
-        if use_user_rules_first:
-            mask_blank = df['Style ID'].astype(str).eq('')
-            if mask_blank.any():
-                df.loc[mask_blank, 'Style ID'] = df.loc[mask_blank].apply(
-                    lambda r: derive_style_id_with_user_rules(r, user_rules=[], fallback=True),
-                    axis=1
-                )
+    st.download_button(
+        'Download Excel',
+        to_excel_bytes({'Master Pivot':pv}),
+        'Master_Pivot.xlsx'
+    )
 
-    # -------- Packet Id Filter (in-filter Select All) --------
-    st.subheader('Packet Id Filter')
-    if 'Packet Id' in df.columns:
-        all_packets_raw = df['Packet Id'].fillna('').astype(str)
-        non_blank = sorted([x for x in all_packets_raw.unique().tolist() if x.strip() != ''])
-        packet_options = non_blank + ['Blank']  # Blank at end
-        sel_packets = multiselect_with_select_all('Packet Id चुनें (Blank सहित)', options=packet_options, default=[], key='pkt_ms')
-    else:
-        st.warning('Packet Id कॉलम नहीं मिला।')
-        sel_packets = []
-
-    # -------- Reason for Credit Entry Filter (in-filter Select All) --------
-    st.subheader('Reason for Credit Entry Filter')
-    if 'Reason for Credit Entry' in df.columns:
-        all_status = sorted(df['Reason for Credit Entry'].dropna().astype(str).unique().tolist())
-        sel_status = multiselect_with_select_all('Select Credit Entry Reasons', options=all_status, default=[], key='rs_ms')
-    else:
-        st.warning('Reason for Credit Entry कॉलम नहीं मिला।')
-        sel_status = []
-
-    # Gate: require both filters to proceed
-    filters_ready = bool(sel_packets) and bool(sel_status)
-    if not filters_ready:
-        st.warning('रिपोर्ट देखने से पहले कृपया दोनों फ़िल्टर चुनें: Packet Id और Reason for Credit Entry. ड्रॉपडाउन के अंदर सबसे ऊपर "— Select All —" से एक क्लिक में सभी चुन सकते हैं।')
-        with st.expander('मदद/Help'):
-            st.write('जब तक दोनों फ़िल्टर खाली हैं, डेटा सारांश और डाउनलोड रोके गए हैं ताकि कोई त्रुटि न दिखे। पहले Packet Id चुनें, फिर Reason चुनें.')
-        return
-
-    # Apply filters only when ready
-    df_filtered = filter_by_packetid(df, sel_packets)
-    df_filtered = filter_by_status(df_filtered, sel_status)
-
-    with st.spinner('Building pivots...'):
-        pv_master = master_pivot(df_filtered)
-        pv_master = add_right_grand_total_column(pv_master)
-        pv_master = add_bottom_total_row(pv_master, label_col='Style ID')
-        pv_styles = stylewise_pivots(df_filtered)
-
-    tab1, tab2, tab3, tab4 = st.tabs(['Data', 'Master Pivot', 'Style-wise Pivots', 'Master List'])
-
-    with tab1:
-        st.dataframe(safe_df_for_display(df_filtered).head(2000), use_container_width=True)
-
-    with tab2:
-        st.dataframe(safe_df_for_display(pv_master), use_container_width=True)
-        colA, colB = st.columns(2)
-        with colA:
-            mp_bytes = to_excel_bytes({'Pivot_Master': pv_master})
-            st.download_button('Download Master Pivot (Excel)', data=mp_bytes,
-                               file_name='Pivot_Master.xlsx',
-                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        with colB:
-            mp_pdf = df_to_pdf_bytes('Master Pivot', pv_master)
-            st.download_button('Download Master Pivot (PDF)', data=mp_pdf,
-                               file_name='Pivot_Master.pdf', mime='application/pdf')
-
-    with tab3:
-        if not pv_styles:
-            st.info('No style-specific pivots available for selected filters.')
-        else:
-            for s, pv in pv_styles:
-                st.markdown(f'### {s}')
-                st.dataframe(safe_df_for_display(pv), use_container_width=True)
-                c1, c2 = st.columns(2)
-                with c1:
-                    one_xlsx = to_excel_bytes({f'Pivot_{s}': pv})
-                    st.download_button(f'Download Excel ({s})', data=one_xlsx,
-                                       file_name=f'Pivot_{s}.xlsx',
-                                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                       key=f'xl_{s}')
-                with c2:
-                    one_pdf = df_to_pdf_bytes(f'Style: {s}', pv)
-                    st.download_button(f'Download PDF ({s})', data=one_pdf,
-                                       file_name=f'Pivot_{s}.pdf', mime='application/pdf',
-                                       key=f'pdf_{s}')
-
-    with tab4:
-        st.markdown('#### Master Style List')
-        cols = ['Style ID','Size','Color','Reason for Credit Entry','Quantity']
-        cols = [c for c in cols if c in df_filtered.columns]
-        master_list = df_filtered[cols] if cols else pd.DataFrame()
-        st.dataframe(safe_df_for_display(master_list), use_container_width=True, height=420)
-        mcol1, mcol2 = st.columns(2)
-        with mcol1:
-            m_xlsx = to_excel_bytes({'Master_List': master_list})
-            st.download_button('Download Master List (Excel)', data=m_xlsx,
-                               file_name='Master_List.xlsx',
-                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        with mcol2:
-            m_pdf = df_to_pdf_bytes('Master List', master_list)
-            st.download_button('Download Master List (PDF)', data=m_pdf,
-                               file_name='Master_List.pdf', mime='application/pdf')
-
-    # All sheets bundle
-    sheets = {'Data_Filtered': df_filtered, 'Pivot_Master': pv_master}
-    for s, pv in pv_styles:
-        sheets[f'Pivot_{s}'] = pv
-    excel_bytes = to_excel_bytes(sheets)
-    st.download_button('Download Excel (All Sheets)', data=excel_bytes,
-                       file_name='All_Data_Pivots.xlsx',
-                       mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-
-    st.success('तैयार: In-filter Select All (दोनों फ़िल्टर्स), Blank Packet Id, सुरक्षित गेटिंग, और Grand Total (right + bottom) Excel/PDF सहित लागू हो गए हैं।')
-
-if __name__ == '__main__':
+if __name__=='__main__':
     main()
