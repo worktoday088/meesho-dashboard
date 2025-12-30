@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
 import io
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Return Packet Scanner", layout="wide", page_icon="🔍")
 
 st.title("🔍 Return Packet Scanner - Meesho OFD Reverse")
-st.markdown("Upload CSV/Excel → Scan packets → Track missing items!")
+st.markdown("**Upload → Scan → Track Missing**")
 
 # Session state
 if "scanned_counts" not in st.session_state:
@@ -16,72 +15,82 @@ if "data_loaded" not in st.session_state:
 if "total_packets" not in st.session_state:
     st.session_state.total_packets = 0
 
-HEADER_ROW_INDEX = 0  # Meesho CSV mein header top par [file:1]
-
-@st.cache_data
-def load_file(file):
-    """Robust CSV/Excel reader - handles all Meesho file formats"""
+def load_file_safe(file):
+    """100% safe CSV/Excel loader - NO CACHE"""
     try:
-        # Reset file pointer
-        file.seek(0)
+        # Always read as bytes first
         file_bytes = file.read()
+        file.seek(0)  # Reset for later use
         
-        # Try CSV first (most common)
-        text = file_bytes.decode("utf-8", errors="ignore")
-        df = pd.read_csv(
-            io.StringIO(text),
-            header=HEADER_ROW_INDEX,
-            engine="python",
-            sep=",",
-            quotechar='"',
-            on_bad_lines="skip",
-            low_memory=False
-        )
-        return df
-    
-    except Exception as e1:
-        try:
-            # Fallback to Excel
-            file.seek(0)
-            df = pd.read_excel(file, header=HEADER_ROW_INDEX)
+        # Method 1: CSV with manual parsing
+        text_content = file_bytes.decode('utf-8', errors='ignore')
+        
+        # Skip first 6 lines (Meesho metadata) [file:1]
+        lines = text_content.split('\n')
+        data_lines = []
+        header_found = False
+        header_line = None
+        
+        for i, line in enumerate(lines):
+            if i < 6:  # Skip metadata
+                continue
+            if not header_found and ',' in line and len(line.strip()) > 10:
+                header_found = True
+                header_line = line
+                data_lines.append(line)
+            elif header_found:
+                data_lines.append(line)
+        
+        if header_line:
+            csv_buffer = io.StringIO('\n'.join(data_lines))
+            df = pd.read_csv(csv_buffer, engine='python')
             return df
-        except Exception as e2:
-            st.error(f"File parse error: CSV - {str(e1)[:100]} | Excel - {str(e2)[:100]}")
+        else:
+            # Fallback: raw CSV
+            csv_buffer = io.StringIO(text_content)
+            df = pd.read_csv(csv_buffer, header=0, engine='python', 
+                           sep=',', quotechar='"', on_bad_lines='skip')
+            return df
+            
+    except:
+        try:
+            # Excel fallback
+            file.seek(0)
+            df = pd.read_excel(file)
+            return df
+        except:
             return None
 
-# File upload section
+# File upload
 st.subheader("📁 File Upload")
-uploaded_file = st.file_uploader("CSV/Excel choose karein", type=["csv", "xlsx"], help="Meesho OFD Reverse report")
+uploaded_file = st.file_uploader("Meesho CSV/Excel upload karein", type=["csv", "xlsx"])
 
 if uploaded_file is not None and not st.session_state.data_loaded:
-    with st.spinner("File analyze kar raha hun..."):
-        df = load_file(uploaded_file)
+    with st.spinner("🔄 File processing..."):
+        df = load_file_safe(uploaded_file)
         
         if df is not None and len(df) > 0:
-            # Auto-detect columns (Meesho standard format)
-            courier_candidates = [col for col in df.columns if "courier" in col.lower()]
-            awb_candidates = [col for col in df.columns if "awb" in col.lower() or "track" in col.lower()]
+            st.session_state.raw_df = df.copy()
             
-            courier_col = courier_candidates[0] if courier_candidates else "Courier Partner"
-            awb_col = awb_candidates[0] if awb_candidates else "AWB Number"
+            # Auto find columns
+            courier_col = next((col for col in df.columns if 'courier' in str(col).lower()), 'Courier Partner')
+            awb_col = next((col for col in df.columns if 'awb' in str(col).lower()), 'AWB Number')
             
             # Verify columns exist
+            available_cols = [col for col in df.columns]
             if courier_col not in df.columns:
-                courier_col = "Courier Partner"
+                courier_col = 'Courier Partner' if 'Courier Partner' in available_cols else available_cols[14] if len(available_cols)>14 else available_cols[0]
             if awb_col not in df.columns:
-                awb_col = "AWB Number"
+                awb_col = 'AWB Number' if 'AWB Number' in available_cols else available_cols[15] if len(available_cols)>15 else available_cols[1]
             
             # Clean data
-            if courier_col in df.columns:
-                df[courier_col] = df[courier_col].astype(str).str.strip()
-            if awb_col in df.columns:
-                df[awb_col] = df[awb_col].astype(str).str.strip()
+            df[courier_col] = df[courier_col].astype(str).str.strip()
+            df[awb_col] = df[awb_col].astype(str).str.strip()
             
-            # Remove duplicates, count unique AWBs
+            # Unique AWBs only
             unique_df = df.drop_duplicates(subset=[awb_col]).dropna(subset=[awb_col])
             total_packets = len(unique_df)
             
-            # Save to session
             st.session_state.df = df
             st.session_state.unique_df = unique_df
             st.session_state.courier_col = courier_col
@@ -89,153 +98,111 @@ if uploaded_file is not None and not st.session_state.data_loaded:
             st.session_state.total_packets = total_packets
             st.session_state.data_loaded = True
             
-            st.success(f"✅ File loaded! Total unique packets: **{total_packets}** | Columns: {courier_col}, {awb_col}")
+            st.success(f"✅ **Loaded!** {total_packets} unique packets | Courier: {courier_col} | AWB: {awb_col}")
+            st.info(f"📋 Columns found: {list(df.columns[:5])}...")
             st.rerun()
         else:
-            st.error("❌ Empty ya invalid file. Fresh Meesho CSV download karke try karein.")
+            st.error("❌ File empty ya corrupt. Fresh Meesho CSV download karein.")
 
-# Main Dashboard
-if st.session_state.get("data_loaded", False):
+# MAIN DASHBOARD
+if st.session_state.get("data_loaded"):
     df = st.session_state.df
     unique_df = st.session_state.unique_df
     courier_col = st.session_state.courier_col
     awb_col = st.session_state.awb_col
     
-    # Metrics & Summary
+    # Metrics
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("📦 Total Expected", st.session_state.total_packets)
-    with col2:
-        scanned_total = len(st.session_state.scanned_counts)
-        st.metric("✅ Scanned", scanned_total, delta=f"{scanned_total}/{st.session_state.total_packets}")
-    with col3:
-        pending = st.session_state.total_packets - scanned_total
-        st.metric("❌ Pending", pending, delta=f"-{pending}")
+    total = st.session_state.total_packets
+    scanned = len(st.session_state.scanned_counts)
+    pending = total - scanned
+    
+    with col1: st.metric("📦 Total", total)
+    with col2: st.metric("✅ Scanned", scanned, f"{scanned}/{total}")
+    with col3: st.metric("❌ Pending", pending, delta=f"-{pending}")
     
     st.markdown("---")
     
-    # Courier Summary Table
-    col4, col5 = st.columns([2, 1])
+    # Courier table
+    col4, col5 = st.columns([2,1])
     with col4:
-        st.subheader("📊 Courier-wise Summary")
-        courier_summary = (
-            unique_df.groupby(courier_col)[awb_col]
-            .nunique()
-            .reset_index(name="Total Packets")
-        )
-        st.dataframe(courier_summary, use_container_width=True)
+        st.subheader("📊 Courier Summary")
+        courier_summary = unique_df.groupby(courier_col)[awb_col].nunique().reset_index(name="Packets")
+        st.dataframe(courier_summary)
     
-    # Scanning Section
-    st.subheader("🔦 Live Packet Scanner")
-    scan_col1, scan_col2 = st.columns([1, 3])
+    # Scanner
+    st.subheader("🔦 **Live Scanner**")
+    col6, col7 = st.columns([1,3])
     
-    with scan_col1:
-        scan_mode = st.radio("Scan Method:", ["Barcode Scanner", "Mobile Camera"], key="scan_mode")
+    with col6:
+        mode = st.radio("Mode:", ["Scanner", "Manual"], key="mode")
     
-    with scan_col2:
-        if scan_mode == "Barcode Scanner":
-            awb_input = st.text_input(
-                "🎯 AWB scan karein (USB scanner ya manually type + Enter)", 
-                placeholder="VL0083065008809",
-                key="awb_scanner"
-            )
+    with col7:
+        if mode == "Scanner":
+            awb_input = st.text_input("🎯 AWB scan (Enter press karein)", key="awb_scan")
         else:
-            # Mobile Camera Scanner
-            awb_input = st.text_input(
-                "📱 Camera scan result (tap container upar)", 
-                placeholder="Camera se scan kiya AWB yahan aayega",
-                key="awb_camera"
-            )
-            
-            # Simple HTML camera placeholder (works better)
-            st.markdown("""
-            <div id="cam-preview" style="
-                width: 100%; height: 200px; 
-                border: 3px dashed #10b981; 
-                border-radius: 12px; 
-                display: flex; align-items: center; justify-content: center;
-                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-                cursor: pointer; font-size: 16px; color: #059669;">
-                📷 Camera Scanner (Mobile Chrome mein best)<br>
-                <small>Tap karke scan shuru karein</small>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Process scanned AWB
-    if 'awb_input' in locals() and awb_input:
+            awb_input = st.text_input("Type AWB:", key="awb_manual")
+    
+    # Process scan
+    if awb_input:
         awb = str(awb_input).strip().upper()
-        if awb and len(awb) > 5:  # Valid AWB length
+        if len(awb) > 5:
             all_awbs = unique_df[awb_col].astype(str).str.strip().str.upper()
             
             if awb in all_awbs.values:
                 st.session_state.scanned_counts[awb] = st.session_state.scanned_counts.get(awb, 0) + 1
                 courier = unique_df[all_awbs == awb][courier_col].iloc[0]
-                st.success(f"✅ **{courier}** ka packet #{st.session_state.scanned_counts[awb]} scan successful!")
+                st.success(f"✅ **{courier}** | AWB: {awb} | Scan #{st.session_state.scanned_counts[awb]}")
                 st.rerun()
             else:
-                st.error(f"❌ AWB **{awb}** file mein nahi mila!")
-
-    st.markdown("---")
+                st.error(f"❌ **{awb}** not in file!")
     
-    # Results Tables
-    col6, col7 = st.columns(2)
+    # Results
+    col8, col9 = st.columns(2)
     
-    with col6:
-        st.subheader("✅ Successfully Scanned")
+    with col8:
+        st.subheader("✅ Scanned")
         if st.session_state.scanned_counts:
             scanned_data = []
-            for awb, count in st.session_state.scanned_counts.items():
-                row = unique_df[unique_df[awb_col].astype(str).str.upper() == awb]
-                courier = row[courier_col].iloc[0] if not row.empty else "Unknown"
-                scanned_data.append({"Courier": courier, "AWB": awb, "Scans": count})
-            
-            scanned_df = pd.DataFrame(scanned_data)
-            st.dataframe(scanned_df, use_container_width=True)
-        else:
-            st.info("📝 Abhi koi scan nahi hua. Scanner se shuru karein!")
+            for awb, cnt in st.session_state.scanned_counts.items():
+                row = unique_df[unique_df[awb_col].str.upper() == awb]
+                courier = row[courier_col].iloc[0] if len(row)>0 else "?"
+                scanned_data.append([courier, awb, cnt])
+            st.dataframe(pd.DataFrame(scanned_data, columns=['Courier','AWB','Count']))
     
-    with col7:
-        st.subheader("❌ Missing Packets (RED Alert)")
-        all_awbs_set = set(unique_df[awb_col].astype(str).str.strip().str.upper())
-        scanned_set = set(st.session_state.scanned_counts.keys())
-        missing_awbs = all_awbs_set - scanned_set
+    with col9:
+        st.subheader("❌ **MISSING** (RED)")
+        all_awbs_set = set(unique_df[awb_col].str.strip().str.upper())
+        scanned_set = set(st.session_state.scanned_counts)
+        missing = all_awbs_set - scanned_set
         
-        if missing_awbs:
-            missing_df = unique_df[
-                unique_df[awb_col].astype(str).str.upper().isin(missing_awbs)
-            ][[courier_col, awb_col]].reset_index(drop=True)
-            
-            # Red highlight styling
-            styled_missing = missing_df.style.apply(
-                lambda x: ['background-color: #fee2e2; color: #dc2626; font-weight: bold'] * len(x), 
-                axis=1
-            )
-            st.dataframe(styled_missing, use_container_width=True)
+        if missing:
+            missing_df = unique_df[unique_df[awb_col].str.upper().isin(missing)]
+            st.dataframe(missing_df[[courier_col, awb_col]])
         else:
-            st.success("🎉 **ALL PACKETS SCANNED!** No missing items.")
-
-    # Reset & Export
-    col8, col9 = st.columns(2)
-    with col8:
-        if st.button("🔄 Reset All Scans", type="secondary", use_container_width=True):
+            st.success("🎉 **COMPLETE!**")
+    
+    # Controls
+    col10, col11 = st.columns(2)
+    with col10:
+        if st.button("🔄 Reset", use_container_width=True):
             st.session_state.scanned_counts = {}
             st.rerun()
-    with col9:
-        if st.button("💾 Download Report", type="primary", use_container_width=True):
-            report_data = []
-            for awb, count in st.session_state.scanned_counts.items():
-                row = unique_df[unique_df[awb_col].astype(str).str.upper() == awb]
-                courier = row[courier_col].iloc[0] if not row.empty else "Unknown"
-                report_data.append([courier, awb, count])
-            
-            report_df = pd.DataFrame(report_data, columns=["Courier", "AWB", "Scan_Count"])
-            csv = report_df.to_csv(index=False)
-            st.download_button(
-                "Download CSV",
-                csv,
-                "scanning_report.csv",
-                "text/csv"
-            )
+    with col11:
+        if st.button("💾 Export", use_container_width=True):
+            report = pd.DataFrame([
+                [courier, awb, cnt] 
+                for awb, cnt in st.session_state.scanned_counts.items()
+                for courier in [unique_df[unique_df[awb_col].str.upper()==awb][courier_col].iloc[0]]
+            ], columns=['Courier','AWB','Scans'])
+            csv = report.to_csv(index=False)
+            st.download_button("Download", csv, "report.csv", "text/csv")
 
 else:
-    st.info("🚀 **Quick Start:**\n1. Meesho se OFD Reverse CSV download karein\n2. Yahan upload karein\n3. Scanner se packets scan karein!")
+    st.markdown("""
+    ## 🚀 **Quick Start**
+    1. Meesho → Supplier Panel → OFD Reverse Report Download
+    2. Yahan CSV upload kariye
+    3. Barcode scanner ya manually AWB scan karein
+    4. Missing packets **RED** mein dikhega!
+    """)
