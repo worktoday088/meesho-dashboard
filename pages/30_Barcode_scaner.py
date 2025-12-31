@@ -2,213 +2,168 @@ import streamlit as st
 import pandas as pd
 import io
 import time
-import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Auto Clear Scanner", layout="wide", page_icon="🔍")
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="Return Packet Scanner PRO",
+    layout="wide",
+    page_icon="📦"
+)
 
-st.title("⚡ **AUTO-CLEAR SCANNER**")
-st.markdown("**Scan → Process → AUTO CLEAR → Ready for Next!**")
+st.title("📦 RETURN PACKET SCANNER – PRO")
+st.markdown("### 🔺 High-Speed Warehouse Scanner | Duplicate Alert | Multi CSV Merge")
 
-# Session state
-if "scanned_counts" not in st.session_state:
-    st.session_state.scanned_counts = {}
-if "data_loaded" not in st.session_state:
-    st.session_state.data_loaded = False
-if "selected_courier" not in st.session_state:
-    st.session_state.selected_courier = "ALL"
+# ---------------- SESSION STATE ----------------
+for k, v in {
+    "scanned_counts": {},
+    "data_loaded": False,
+    "selected_courier": "ALL",
+    "last_scan_time": 0,
+    "AUTO_SCANNER_BOX": ""
+}.items():
+    st.session_state.setdefault(k, v)
 
-COURIER_MAP = {"PocketShip": "Valmo", "pocketship": "Valmo"}
+# ---------------- COURIER MAP ----------------
+COURIER_MAP = {
+    "pocketship": "Valmo",
+    "PocketShip": "Valmo"
+}
 
 def normalize_courier(name):
-    if pd.isna(name): return "Unknown"
-    return COURIER_MAP.get(str(name).strip().lower(), str(name).strip())
+    if pd.isna(name):
+        return "Unknown"
+    return COURIER_MAP.get(str(name).strip().lower(), name)
 
-def load_file(file):
-    file_bytes = file.read()
-    file.seek(0)
-    text = file_bytes.decode('utf-8', errors='ignore')
-    lines = text.split('\n')[6:]
-    df = pd.read_csv(io.StringIO('\n'.join(lines)), engine='python')
+# ---------------- CSV SAFE LOADER ----------------
+def load_csv_clean(file, header_cols=None):
+    raw = file.read().decode("utf-8", errors="ignore")
+    lines = raw.split("\n")[6:]  # skip Meesho metadata
+    df = pd.read_csv(io.StringIO("\n".join(lines)), engine="python", on_bad_lines="skip")
+
+    if header_cols:
+        df.columns = header_cols
+
     return df
 
-# File upload
-uploaded_file = st.file_uploader("📁 CSV", type=["csv"])
+# ---------------- UPLOAD SECTION ----------------
+st.subheader("🔺 UPLOAD CSV FILES")
+uploaded_files = st.file_uploader(
+    "Select one or more CSV files",
+    type=["csv"],
+    accept_multiple_files=True
+)
 
-if uploaded_file is not None and not st.session_state.data_loaded:
-    df = load_file(uploaded_file)
-    if df is not None:
-        courier_col = next((col for col in df.columns if 'courier' in str(col).lower()), 'Courier Partner')
-        awb_col = next((col for col in df.columns if 'awb' in str(col).lower()), 'AWB Number')
-        
-        df[courier_col] = df[courier_col].apply(normalize_courier)
-        df[awb_col] = df[awb_col].astype(str).str.strip()
-        unique_df = df.drop_duplicates(subset=[awb_col]).dropna(subset=[awb_col])
-        
-        st.session_state.df = df
-        st.session_state.unique_df = unique_df
-        st.session_state.courier_col = courier_col
-        st.session_state.awb_col = awb_col
-        st.session_state.total_packets = len(unique_df)
-        st.session_state.data_loaded = True
+if uploaded_files and not st.session_state.data_loaded:
+    with st.spinner("🔄 Loading & merging files..."):
+        master_df = None
+        master_headers = None
+
+        for i, file in enumerate(uploaded_files):
+            df = load_csv_clean(file, master_headers)
+            if i == 0:
+                master_headers = df.columns
+                master_df = df
+            else:
+                master_df = pd.concat([master_df, df], ignore_index=True)
+
+        # Detect columns
+        courier_col = next(c for c in master_df.columns if "courier" in c.lower())
+        awb_col = next(c for c in master_df.columns if "awb" in c.lower())
+
+        master_df[courier_col] = master_df[courier_col].apply(normalize_courier)
+        master_df[awb_col] = master_df[awb_col].astype(str).str.strip()
+
+        unique_df = master_df.drop_duplicates(subset=[awb_col])
+
+        st.session_state.update({
+            "df": master_df,
+            "unique_df": unique_df,
+            "courier_col": courier_col,
+            "awb_col": awb_col,
+            "data_loaded": True
+        })
         st.rerun()
 
-if st.session_state.get("data_loaded"):
-    unique_df = st.session_state.unique_df
+# ---------------- MAIN DASHBOARD ----------------
+if st.session_state.data_loaded:
+    df = st.session_state.unique_df
     courier_col = st.session_state.courier_col
     awb_col = st.session_state.awb_col
-    
-    # Courier selector
-    col1, col2, col3 = st.columns([1,2,2])
+
+    couriers = sorted(df[courier_col].unique())
+
+    col1, col2 = st.columns([1, 2])
     with col1:
-        all_couriers = sorted(unique_df[courier_col].unique())
-        selected_courier = st.selectbox("🎯 Courier:", ["ALL"] + list(all_couriers), key="courier_select")
-        st.session_state.selected_courier = selected_courier
-    
-    filtered_df = unique_df if selected_courier == "ALL" else unique_df[unique_df[courier_col] == selected_courier]
-    
-    # Metrics
-    total = len(filtered_df)
-    scanned_total = sum(1 for awb in st.session_state.scanned_counts if awb in filtered_df[awb_col].str.upper())
-    col2.metric("📦 Total", total)
-    col3.metric("✅ Scanned", scanned_total, f"{scanned_total}/{total}")
-    
-    st.markdown("---")
-    
-    # 🔥 **AUTO-CLEAR SCANNER** - MAIN FEATURE!
-    st.subheader("⚡ **AUTO-CLEAR SCANNER**")
-    st.markdown("**Scan → Match → AUTO CLEAR → Next Ready!**")
-    
-    # **SUPER LARGE FOCUSED BOX + AUTO-CLEAR JS**
-    components.html("""
-    <style>
-    .scanner-container {
-        border: 4px solid #10b981 !important;
-        border-radius: 20px !important;
-        background: linear-gradient(135deg, #f0fdf4, #dcfce7) !important;
-        padding: 25px !important;
-        text-align: center !important;
-        font-family: 'Courier New', monospace !important;
-    }
-    #scanner-input {
-        width: 100% !important;
-        height: 80px !important;
-        font-size: 28px !important;
-        font-family: 'Courier New', monospace !important;
-        border: 3px solid #10b981 !important;
-        border-radius: 15px !important;
-        text-align: center !important;
-        background: white !important;
-        color: #059669 !important;
-        outline: none !important;
-        caret-color: #059669 !important;
-    }
-    #scanner-input:focus {
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.5) !important;
-        border-color: #059669 !important;
-    }
-    </style>
-    
-    <div class="scanner-container">
-        <div style="font-size: 24px; font-weight: bold; color: #059669; margin-bottom: 15px;">
-            🎯 **AUTO-CLEAR ZONE**
-        </div>
-        <input type="text" 
-               id="scanner-input" 
-               placeholder="🔍 Scanner yahan focus karega... SCAN!"
-               autocomplete="off"
-               autocorrect="off"
-               autocapitalize="off"
-               spellcheck="false">
-        <div style="margin-top: 10px; font-size: 14px; color: #666;">
-            📱 Scanner plug → **AUTO FOCUS** → Scan → **AUTO CLEAR**
-        </div>
-        <input type="hidden" id="awb-result">
-    </div>
-    
-    <script>
-    const scannerInput = document.getElementById('scanner-input');
-    const awbResult = document.getElementById('awb-result');
-    
-    // AUTO-FOCUS (always ready)
-    scannerInput.focus();
-    
-    let debounceTimer;
-    let lastAWB = '';
-    
-    scannerInput.addEventListener('input', function(e) {
-        const awb = e.target.value.trim().toUpperCase();
-        
-        // Only process if valid AWB length
-        if (awb.length >= 12) {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                if (awb !== lastAWB && awb.length >= 12) {
-                    awbResult.value = awb;
-                    lastAWB = awb;
-                    
-                    // AUTO-CLEAR MAGIC! ✅
-                    e.target.value = '';
-                    
-                    // Trigger Streamlit
-                    window.parent.streamlit.setComponentValue(awb);
-                }
-            }, 200); // 200ms debounce
-        }
-    });
-    
-    // Keep focus after clear
-    scannerInput.addEventListener('blur', () => {
-        setTimeout(() => scannerInput.focus(), 50);
-    });
-    
-    </script>
-    """, height=250)
-    
-    # Receive from JS
-    awb_scanned = st.text_input("", key="awb_from_scanner", label_visibility="hidden")
-    
-    # **INSTANT PROCESS + AUTO-CLEAR**
-    if awb_scanned:
-        awb = awb_scanned.strip().upper()
-        all_awbs = filtered_df[awb_col].astype(str).str.strip().str.upper()
-        
-        if awb in all_awbs.values:
-            st.session_state.scanned_counts[awb] = st.session_state.scanned_counts.get(awb, 0) + 1
-            courier = filtered_df[all_awbs == awb][courier_col].iloc[0]
-            st.balloons()
-            st.success(f"✅ **{courier}** | {awb} | **#{st.session_state.scanned_counts[awb]}**")
-            st.rerun()
-        else:
-            st.error(f"❌ **{awb}** Not Found!")
-    
-    st.markdown("---")
-    
-    # Results
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("✅ SCANNED")
-        scanned_list = []
-        for awb, cnt in st.session_state.scanned_counts.items():
-            if awb in filtered_df[awb_col].str.upper():
-                row = filtered_df[filtered_df[awb_col].str.upper() == awb]
-                courier = row[courier_col].iloc[0]
-                scanned_list.append([courier, awb, cnt])
-        if scanned_list:
-            st.dataframe(pd.DataFrame(scanned_list, columns=['Courier','AWB','Count']))
-    
+        selected = st.selectbox(
+            "🎯 Select Courier",
+            ["ALL"] + couriers
+        )
+        st.session_state.selected_courier = selected
+
+    filtered = df if selected == "ALL" else df[df[courier_col] == selected]
+
+    total = len(filtered)
+    scanned = len([a for a in st.session_state.scanned_counts if a in filtered[awb_col].str.upper().values])
+
     with col2:
-        st.subheader("❌ MISSING")
-        scanned_set = set(awb for awb in st.session_state.scanned_counts if awb in filtered_df[awb_col].str.upper())
-        missing = set(filtered_df[awb_col].str.strip().str.upper()) - scanned_set
-        if missing:
-            missing_df = filtered_df[filtered_df[awb_col].str.upper().isin(missing)]
-            st.dataframe(missing_df[[courier_col, awb_col]])
+        st.metric("📦 TOTAL", total)
+        st.metric("✅ SCANNED", scanned)
+        st.metric("❌ PENDING", total - scanned)
+
+    st.markdown("---")
+
+    # ---------------- SCANNER ----------------
+    st.subheader("🔦 AUTO SCAN AREA")
+
+    awb_input = st.text_input(
+        "SCAN AWB HERE",
+        key="AUTO_SCANNER_BOX",
+        placeholder="Scanner input auto...",
+    )
+
+    now = time.time()
+    if awb_input and now - st.session_state.last_scan_time > 0.4:
+        awb = awb_input.strip().upper()
+        all_awbs = filtered[awb_col].str.upper()
+
+        if awb in all_awbs.values:
+            if awb in st.session_state.scanned_counts:
+                st.warning(f"⚠ DUPLICATE SCAN | {awb}")
+                st.session_state.scanned_counts[awb] += 1
+            else:
+                courier = filtered[all_awbs == awb][courier_col].iloc[0]
+                st.success(f"✅ {courier} | {awb}")
+                st.session_state.scanned_counts[awb] = 1
         else:
-            st.success("🎉 COMPLETE!")
-    
-    if st.button("🔄 RESET", use_container_width=True):
+            st.error(f"❌ NOT FOUND | {awb}")
+
+        st.session_state.AUTO_SCANNER_BOX = ""
+        st.session_state.last_scan_time = now
+        st.rerun()
+
+    st.markdown("---")
+
+    # ---------------- RESULTS ----------------
+    colA, colB = st.columns(2)
+
+    with colA:
+        st.subheader("✅ SCANNED LIST")
+        data = []
+        for awb, cnt in st.session_state.scanned_counts.items():
+            row = df[df[awb_col].str.upper() == awb]
+            if not row.empty:
+                data.append([row[courier_col].iloc[0], awb, cnt])
+        st.dataframe(pd.DataFrame(data, columns=["Courier", "AWB", "Count"]))
+
+    with colB:
+        st.subheader("❌ MISSING")
+        missing = set(filtered[awb_col].str.upper()) - set(st.session_state.scanned_counts)
+        st.dataframe(filtered[filtered[awb_col].str.upper().isin(missing)][[courier_col, awb_col]])
+
+    # ---------------- CONTROLS ----------------
+    if st.button("🔄 RESET ALL"):
         st.session_state.scanned_counts = {}
         st.rerun()
 
 else:
-    st.info("📤 CSV upload first!")
+    st.info("⬆ Upload CSV files to start")
