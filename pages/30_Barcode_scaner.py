@@ -1,169 +1,189 @@
 import streamlit as st
 import pandas as pd
-import io
-import time
+import io, time
 
-# ---------------- CONFIG ----------------
+# ================== PAGE CONFIG ==================
 st.set_page_config(
     page_title="Return Packet Scanner PRO",
     layout="wide",
     page_icon="📦"
 )
 
-st.title("📦 RETURN PACKET SCANNER – PRO")
-st.markdown("### 🔺 High-Speed Warehouse Scanner | Duplicate Alert | Multi CSV Merge")
+# ================== CSS + SOUND ==================
+st.markdown("""
+<style>
+.upload-box {
+    border: 3px dashed #fb923c;
+    padding: 20px;
+    background: #fff7ed;
+    border-radius: 14px;
+    position: relative;
+    margin-bottom: 10px;
+}
+.upload-box::before {
+    content: "▲";
+    position: absolute;
+    top: -22px;
+    left: 20px;
+    font-size: 34px;
+    color: #fb923c;
+}
+.scan-box input {
+    font-size: 28px !important;
+    height: 60px;
+}
+</style>
 
-# ---------------- SESSION STATE ----------------
+<script>
+function beep(freq){
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = freq;
+    osc.connect(ctx.destination);
+    osc.start();
+    setTimeout(()=>osc.stop(),150);
+}
+</script>
+""", unsafe_allow_html=True)
+
+# ================== TITLE ==================
+st.title("📦 RETURN PACKET SCANNER – PRO")
+st.markdown("### 🔺 High-Speed Warehouse Scanner | Duplicate Block | Multi CSV Merge")
+
+# ================== SESSION ==================
 for k, v in {
-    "scanned_counts": {},
+    "scanned": set(),
     "data_loaded": False,
     "selected_courier": "ALL",
-    "last_scan_time": 0,
-    "AUTO_SCANNER_BOX": ""
+    "last_scan": 0
 }.items():
     st.session_state.setdefault(k, v)
 
-# ---------------- COURIER MAP ----------------
-COURIER_MAP = {
-    "pocketship": "Valmo",
-    "PocketShip": "Valmo"
-}
-
-def normalize_courier(name):
-    if pd.isna(name):
-        return "Unknown"
-    return COURIER_MAP.get(str(name).strip().lower(), name)
-
-# ---------------- CSV SAFE LOADER ----------------
-def load_csv_clean(file, header_cols=None):
+# ================== HELPERS ==================
+def load_csv(file, header=None):
     raw = file.read().decode("utf-8", errors="ignore")
-    lines = raw.split("\n")[6:]  # skip Meesho metadata
+    lines = raw.split("\n")[6:]
     df = pd.read_csv(io.StringIO("\n".join(lines)), engine="python", on_bad_lines="skip")
-
-    if header_cols:
-        df.columns = header_cols
-
+    if header is not None:
+        df.columns = header
     return df
 
-# ---------------- UPLOAD SECTION ----------------
-st.subheader("🔺 UPLOAD CSV FILES")
-uploaded_files = st.file_uploader(
-    "Select one or more CSV files",
+# ================== UPLOAD UI ==================
+st.markdown("""
+<div class="upload-box">
+<h3>🔺 UPLOAD CSV FILES</h3>
+<b>Select one or more CSV files</b>
+</div>
+""", unsafe_allow_html=True)
+
+files = st.file_uploader(
+    "",
     type=["csv"],
     accept_multiple_files=True
 )
 
-if uploaded_files and not st.session_state.data_loaded:
-    with st.spinner("🔄 Loading & merging files..."):
-        master_df = None
-        master_headers = None
+if files and not st.session_state.data_loaded:
+    with st.spinner("Merging files..."):
+        base_df = None
+        headers = None
 
-        for i, file in enumerate(uploaded_files):
-            df = load_csv_clean(file, master_headers)
+        for i, f in enumerate(files):
+            df = load_csv(f, headers)
             if i == 0:
-                master_headers = df.columns
-                master_df = df
+                headers = df.columns
+                base_df = df
             else:
-                master_df = pd.concat([master_df, df], ignore_index=True)
+                base_df = pd.concat([base_df, df], ignore_index=True)
 
-        # Detect columns
-        courier_col = next(c for c in master_df.columns if "courier" in c.lower())
-        awb_col = next(c for c in master_df.columns if "awb" in c.lower())
+        courier_col = next(c for c in base_df.columns if "courier" in c.lower())
+        awb_col = next(c for c in base_df.columns if "awb" in c.lower())
 
-        master_df[courier_col] = master_df[courier_col].apply(normalize_courier)
-        master_df[awb_col] = master_df[awb_col].astype(str).str.strip()
-
-        unique_df = master_df.drop_duplicates(subset=[awb_col])
+        base_df[awb_col] = base_df[awb_col].astype(str).str.strip()
+        base_df = base_df.drop_duplicates(subset=[awb_col])
 
         st.session_state.update({
-            "df": master_df,
-            "unique_df": unique_df,
+            "df": base_df,
             "courier_col": courier_col,
             "awb_col": awb_col,
             "data_loaded": True
         })
         st.rerun()
 
-# ---------------- MAIN DASHBOARD ----------------
+# ================== DASHBOARD ==================
 if st.session_state.data_loaded:
-    df = st.session_state.unique_df
+    df = st.session_state.df
     courier_col = st.session_state.courier_col
     awb_col = st.session_state.awb_col
 
-    couriers = sorted(df[courier_col].unique())
+    couriers = sorted(df[courier_col].dropna().unique())
+    col1, col2 = st.columns([1,2])
 
-    col1, col2 = st.columns([1, 2])
     with col1:
-        selected = st.selectbox(
-            "🎯 Select Courier",
-            ["ALL"] + couriers
-        )
-        st.session_state.selected_courier = selected
+        sel = st.selectbox("🎯 Select Courier", ["ALL"] + couriers)
+        st.session_state.selected_courier = sel
 
-    filtered = df if selected == "ALL" else df[df[courier_col] == selected]
-
-    total = len(filtered)
-    scanned = len([a for a in st.session_state.scanned_counts if a in filtered[awb_col].str.upper().values])
+    filtered = df if sel == "ALL" else df[df[courier_col] == sel]
 
     with col2:
-        st.metric("📦 TOTAL", total)
-        st.metric("✅ SCANNED", scanned)
-        st.metric("❌ PENDING", total - scanned)
+        st.metric("📦 TOTAL", len(filtered))
+        st.metric("✅ SCANNED", len(st.session_state.scanned))
+        st.metric("❌ PENDING", len(filtered) - len(st.session_state.scanned))
 
     st.markdown("---")
 
-    # ---------------- SCANNER ----------------
+    # ================== SCANNER ==================
     st.subheader("🔦 AUTO SCAN AREA")
 
-    awb_input = st.text_input(
+    awb = st.text_input(
         "SCAN AWB HERE",
-        key="AUTO_SCANNER_BOX",
-        placeholder="Scanner input auto...",
+        key="SCANBOX",
+        placeholder="Scanner auto input...",
+        label_visibility="collapsed"
     )
 
     now = time.time()
-    if awb_input and now - st.session_state.last_scan_time > 0.4:
-        awb = awb_input.strip().upper()
-        all_awbs = filtered[awb_col].str.upper()
+    if awb and now - st.session_state.last_scan > 0.4:
+        awb = awb.strip().upper()
+        all_awb = filtered[awb_col].str.upper().values
 
-        if awb in all_awbs.values:
-            if awb in st.session_state.scanned_counts:
-                st.warning(f"⚠ DUPLICATE SCAN | {awb}")
-                st.session_state.scanned_counts[awb] += 1
-            else:
-                courier = filtered[all_awbs == awb][courier_col].iloc[0]
-                st.success(f"✅ {courier} | {awb}")
-                st.session_state.scanned_counts[awb] = 1
+        if awb in st.session_state.scanned:
+            st.warning(f"⚠ DUPLICATE | {awb}")
+            st.components.v1.html("<script>beep(400)</script>", height=0)
+
+        elif awb in all_awb:
+            st.success(f"✅ SCANNED | {awb}")
+            st.session_state.scanned.add(awb)
+            st.components.v1.html("<script>beep(900)</script>", height=0)
+
         else:
             st.error(f"❌ NOT FOUND | {awb}")
+            st.components.v1.html("<script>beep(200)</script>", height=0)
 
-        st.session_state.AUTO_SCANNER_BOX = ""
-        st.session_state.last_scan_time = now
+        if "SCANBOX" in st.session_state:
+            del st.session_state["SCANBOX"]
+
+        st.session_state.last_scan = now
         st.rerun()
 
     st.markdown("---")
 
-    # ---------------- RESULTS ----------------
-    colA, colB = st.columns(2)
+    # ================== TABLES ==================
+    c1, c2 = st.columns(2)
 
-    with colA:
-        st.subheader("✅ SCANNED LIST")
-        data = []
-        for awb, cnt in st.session_state.scanned_counts.items():
-            row = df[df[awb_col].str.upper() == awb]
-            if not row.empty:
-                data.append([row[courier_col].iloc[0], awb, cnt])
-        st.dataframe(pd.DataFrame(data, columns=["Courier", "AWB", "Count"]))
+    with c1:
+        st.subheader("✅ SCANNED")
+        st.dataframe(
+            filtered[filtered[awb_col].str.upper().isin(st.session_state.scanned)][[courier_col, awb_col]]
+        )
 
-    with colB:
+    with c2:
         st.subheader("❌ MISSING")
-        missing = set(filtered[awb_col].str.upper()) - set(st.session_state.scanned_counts)
+        missing = set(filtered[awb_col].str.upper()) - st.session_state.scanned
         st.dataframe(filtered[filtered[awb_col].str.upper().isin(missing)][[courier_col, awb_col]])
 
-    # ---------------- CONTROLS ----------------
-    if st.button("🔄 RESET ALL"):
-        st.session_state.scanned_counts = {}
+    if st.button("🔄 RESET ALL", use_container_width=True):
+        st.session_state.scanned.clear()
         st.rerun()
 
 else:
-    st.info("⬆ Upload CSV files to start")
+    st.info("⬆ Upload CSV files to start scanning")
