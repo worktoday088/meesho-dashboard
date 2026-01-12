@@ -1,19 +1,22 @@
 # test_11.py
-# 📦 Meesho Order Analysis Dashboard — Final (test_11)
+# 📦 Meesho Order Analysis Dashboard — Final (test_11) + LOGIN SYSTEM
 # Merged from rehan_v11.py + SKU Groups, Chart toggles, Clear fixes, PDF & Excel improvements
-# Date: 2025-09-16
-# Version: test_11_final
+# Date: 2026-01-12
+# Version: Power By Rehan + Secure Login
 
 import os
 import re
 import math
 import tempfile
+import yaml
 from io import BytesIO
+from pathlib import Path
 from datetime import datetime, date
 
 import pandas as pd
 import numpy as np
 import streamlit as st
+import streamlit_authenticator as stauth
 import plotly.express as px
 from PIL import Image
 
@@ -35,9 +38,66 @@ except Exception:
 
 __VERSION__ = "Power By Rehan"
 
+# ---------------- LOGIN SYSTEM (NAYA CODE) ----------------
+st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__} Secure")
+
+# Config load karo
+config_file = Path("config.yaml")
+if not config_file.exists():
+    st.error("🔒 **Config file missing! Contact Admin (admin@meesho.com)**")
+    st.markdown("### Admin Credentials: `admin@meesho.com` / `Admin@123`")
+    st.stop()
+
+with open(config_file) as file:
+    config = yaml.safe_load(file)
+
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config['preauthorized']
+)
+
+name, authentication_status, username = authenticator.login(
+    '🔐 **Meesho Dashboard - Secure Login**', 
+    'main',
+    location='sidebar'
+)
+
+if authentication_status == False:
+    st.error('❌ **Username/password galat hai!**')
+    st.stop()
+    
+elif authentication_status == None:
+    st.markdown("""
+    # 🎯 **Meesho Dashboard - Authorized Access Only**
+    
+    ### 🔐 **Login Credentials:**
+    | Role | Email | Password |
+    |------|-------|----------|
+    | 👑 **Admin** | `admin@meesho.com` | `Admin@123` |
+    | 👤 **Client 1** | `client1@meesho.com` | `Client@123` |
+    | 👤 **Client 2** | `client2@meesho.com` | `Client@123` |
+    | 👤 **Client 3** | `client3@meesho.com` | `Client@123` |
+    | 👤 **Client 4** | `client4@meesho.com` | `Client@123` |
+    
+    **Contact Admin for more access.**
+    """)
+    st.stop()
+
+# ✅ LOGIN SUCCESS - DASHBOARD START
+st.sidebar.success(f'✅ **Welcome {name}**')
+st.sidebar.markdown("---")
+authenticator.logout('🚪 **Logout**', 'sidebar')
+
+# ---------------- AAPKA ORIGINAL DASHBOARD CODE YAHAN SE SHURU ----------------
+st.title(f"📦 **Meesho Order Analysis Dashboard** — {__VERSION__}")
+st.markdown(f"**Logged in as:** *{name}* | **Status:** ✅ Active Session")
+
+# [BAKI AAPKA PURANA CODE YAHAN EXACT SAME RAHEGA]
 # ---------------- PAGE SETUP ----------------
-st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
-st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
+# st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
 st.caption(
     "Merged: original v11 features + SKU Groups, Chart toggles, Clear fixes, improved PDF/Excel"
 )
@@ -1057,3 +1117,4 @@ with col_pdf2:
         st.info("Compact PDF के लिए kaleido ज़रूरी है।")
 
 st.success("✅ test_11 ready — merged original features + SKU Groups + Chart toggles + PDF/Excel improvements")
+
