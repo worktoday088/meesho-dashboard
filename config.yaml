@@ -1,0 +1,22 @@
+credentials:
+  usernames:
+    admin:
+      email: "admin@meesho.com"
+      name: "Rehan Admin"
+      password: "Admin@123"
+    client1:
+      email: "client1@meesho.com"
+      name: "Rahul Sharma"
+      password: "Client@123"
+    client2:
+      email: "client2@meesho.com"
+      name: "Priya Gupta"
+      password: "Client@123"
+
+cookie:
+  name: "meesho_login_secure"
+  key: "meesho_key_2026_random_secure_xyz"
+  expiry_days: 30
+
+preauthorized:
+  emails = ["admin@meesho.com"]
