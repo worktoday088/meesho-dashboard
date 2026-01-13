@@ -6,6 +6,10 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 
+# 🔐 LOGIN CHECK (YAHI ADD KARNA HAI)
+if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
+    st.warning("🔒 Please login first")
+    st.stop()
 
 # -------------------------------
 # Function to generate Payment Date Summary
@@ -226,3 +230,4 @@ if uploaded_file:
     # Download Full PDF Report
     pdf_data = export_pdf(summary_list, dispatch_summary_list, scheduled_amount, total_ads_cost, net_scheduled_payment, unscheduled_amount, upcoming_payment)
     st.download_button("📥 Download Full PDF Report", data=pdf_data, file_name="Full_Report.pdf", mime="application/pdf")
+
