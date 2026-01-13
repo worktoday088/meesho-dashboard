@@ -5,7 +5,7 @@ import hashlib
 # PAGE CONFIG (SIDEBAR LOCK)
 # =========================
 st.set_page_config(
-    page_title="Meesho Order Matcher",
+    page_title="Meesho Data Analysing Dashboard",
     layout="wide",
     initial_sidebar_state="collapsed"  # 🔒 login se pehle sidebar band
 )
@@ -124,3 +124,4 @@ st.title("📊 Meesho Dashboard")
 st.write("Login ke baad hi ye dashboard accessible hai.")
 
 st.success("🎉 Sidebar + Pages ab fully protected hain")
+
