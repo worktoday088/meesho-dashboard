@@ -3,55 +3,62 @@ import pandas as pd
 from io import BytesIO
 
 st.set_page_config(
-    page_title="Sarita Lite – Image Style Grouper",
-    layout="centered"
+    page_title="Image Style Excel Tool",
+    layout="wide"
 )
 
-st.title("🧵 Sarita Lite Image Style Grouper")
-st.write("Upload Excel → Get Style-wise Output (4 Images = 1 Style)")
+st.title("📊 Image Style Excel Automation (Streamlit)")
+st.write("Upload Excel → Get Style-wise Repeated Output")
 
-GROUP_SIZE = 4
+GROUP_SIZE = 4      # 4 images = 1 style
+REPEAT_ROWS = 4     # same style repeat 4 rows
 
 uploaded_file = st.file_uploader(
-    "📤 Upload Excel File (Links in Column A)",
+    "📤 Upload Excel (Image links in Column A)",
     type=["xlsx"]
 )
 
 if uploaded_file:
     try:
-        # Read Excel
         df = pd.read_excel(uploaded_file, usecols=[0], header=None)
         links = df[0].dropna().tolist()
 
         if len(links) < GROUP_SIZE:
             st.warning("❗ Minimum 4 image links required.")
         else:
-            # Group links (4 = 1 style)
-            grouped = [
-                links[i:i + GROUP_SIZE]
-                for i in range(0, len(links), GROUP_SIZE)
-            ]
+            final_rows = []
 
-            output_df = pd.DataFrame(grouped)
+            for i in range(0, len(links), GROUP_SIZE):
+                style = links[i:i + GROUP_SIZE]
+
+                if len(style) == GROUP_SIZE:
+                    for _ in range(REPEAT_ROWS):
+                        final_rows.append(style)
+
+            output_df = pd.DataFrame(
+                final_rows,
+                columns=["Image 1", "Image 2", "Image 3", "Image 4"]
+            )
 
             st.success("✅ File processed successfully!")
 
-            st.subheader("📊 Preview (Top 5 Styles)")
-            st.dataframe(output_df.head())
+            # FULL PREVIEW (no limit)
+            st.subheader("📋 Full Preview (Copy–Paste Ready)")
+            st.dataframe(output_df, use_container_width=True)
 
-            # Convert to Excel for download
+            # Download Excel
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 output_df.to_excel(
                     writer,
                     index=False,
-                    header=False
+                    sheet_name="Final_Data"
                 )
 
             st.download_button(
-                label="⬇️ Download Output Excel",
+                label="⬇️ Download Excel Output",
                 data=output.getvalue(),
-                file_name="style_grouped_output.xlsx",
+                file_name="final_style_repeated_output.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
