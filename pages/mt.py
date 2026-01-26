@@ -3,18 +3,18 @@ import pandas as pd
 from io import BytesIO
 
 st.set_page_config(
-    page_title="Meesho Template Image Filler",
+    page_title="Meesho Auto Detect Image Tool",
     layout="wide"
 )
 
-st.title("🧵 Meesho Template – Image & Style ID Automation (Streamlit)")
-st.write("Upload Meesho Excel → Auto fill images + Product ID → Direct Upload Ready")
+st.title("🧵 Meesho Auto-Detect Image & Style ID Tool (Streamlit)")
+st.write("Original Meesho Template Upload करें → Auto Fill → Direct Upload")
 
 # ================= USER INPUTS =================
 
-sheet_name = st.text_input(
-    "📄 Image links वाली Sheet का exact नाम लिखें",
-    placeholder="Example: Catalog Upload"
+uploaded_file = st.file_uploader(
+    "📤 Original Meesho Excel Template Upload करें",
+    type=["xlsx"]
 )
 
 images_per_style = st.number_input(
@@ -31,41 +31,51 @@ repeat_rows = st.number_input(
     value=4
 )
 
-uploaded_file = st.file_uploader(
-    "📤 Meesho Excel Template Upload करें",
-    type=["xlsx"]
-)
-
 # ================= PROCESS =================
 
-if uploaded_file and sheet_name:
+if uploaded_file:
     try:
-        # Read template with header at row 3 (index 2)
+        # Load Excel
+        xls = pd.ExcelFile(uploaded_file)
+        sheet_name = st.selectbox(
+            "📄 Image वाली Sheet select करें",
+            xls.sheet_names
+        )
+
+        # Read sheet with header at row 3
         df = pd.read_excel(
             uploaded_file,
             sheet_name=sheet_name,
             header=2
         )
 
-        # Image columns (auto-detect)
-        image_columns = [
-            col for col in df.columns
-            if str(col).lower().startswith("image")
-        ]
+        # ---------- AUTO DETECT IMAGE COLUMNS ----------
+        image_columns = []
+        for col in df.columns:
+            col_text = str(col).lower()
+            if "image" in col_text:
+                image_columns.append(col)
 
-        style_col = "Product ID / style ID"
-
-        if style_col not in df.columns:
-            st.error(f"❌ Column '{style_col}' नहीं मिला.")
+        if not image_columns:
+            st.error("❌ Image columns auto-detect नहीं हो पाए.")
             st.stop()
 
-        if len(image_columns) < images_per_style:
-            st.error("❌ Template में image columns style size से कम हैं.")
-            st.stop()
-
+        # Limit image columns to selected style size
         image_columns = image_columns[:images_per_style]
 
-        # Data start row = Row 5 → index 4
+        # ---------- AUTO DETECT STYLE ID COLUMN ----------
+        style_col = None
+        for col in df.columns:
+            col_text = str(col).lower()
+            if "product" in col_text and "style" in col_text:
+                style_col = col
+                break
+
+        if style_col is None:
+            st.error("❌ Product ID / Style ID column auto-detect नहीं हुआ.")
+            st.stop()
+
+        # ---------- READ IMAGE LINKS (Row 5 onward) ----------
         data_df = df.iloc[4:].copy()
 
         links = []
@@ -77,7 +87,7 @@ if uploaded_file and sheet_name:
         total_styles = len(links) // images_per_style
 
         if total_styles == 0:
-            st.warning("❗ Image links पर्याप्त नहीं हैं.")
+            st.warning("❗ पर्याप्त image links नहीं मिले.")
             st.stop()
 
         st.markdown("## ✏️ हर Style के लिए Product ID / Style ID लिखें")
@@ -85,16 +95,15 @@ if uploaded_file and sheet_name:
         style_ids = []
         for i in range(total_styles):
             sid = st.text_input(
-                f"Style {i+1} Product ID / Style ID",
-                key=f"style_{i}"
+                f"Style {i+1} – Product ID / Style ID",
+                key=f"sid_{i}"
             )
             style_ids.append(sid)
 
-        if st.button("✅ Fill Template"):
-            output_rows = []
-            start_row_index = 4  # row 5 in Excel
-
-            current_excel_row = start_row_index
+        # ---------- FILL TEMPLATE ----------
+        if st.button("✅ Auto Fill Meesho Template"):
+            start_excel_row = 4  # Row 5
+            current_row = start_excel_row
 
             for i in range(total_styles):
                 style_images = links[
@@ -103,30 +112,30 @@ if uploaded_file and sheet_name:
 
                 for _ in range(repeat_rows):
                     for j, col in enumerate(image_columns):
-                        df.at[current_excel_row, col] = style_images[j]
+                        df.at[current_row, col] = style_images[j]
 
-                    df.at[current_excel_row, style_col] = style_ids[i]
-                    current_excel_row += 1
+                    df.at[current_row, style_col] = style_ids[i]
+                    current_row += 1
 
-            st.success("✅ Template Successfully Filled!")
+            st.success("✅ Meesho Template Successfully Filled!")
 
-            st.markdown("## 📋 Preview (Exact Template Format)")
-            st.dataframe(df.iloc[:current_excel_row], use_container_width=True)
+            st.markdown("## 📋 Preview (Exact Meesho Format)")
+            st.dataframe(df.iloc[:current_row], use_container_width=True)
 
-            # Download filled template
+            # ---------- DOWNLOAD ----------
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df.to_excel(
                     writer,
                     index=False,
                     sheet_name=sheet_name,
-                    startrow=2   # header back to row 3
+                    startrow=2  # Header back to row 3
                 )
 
             st.download_button(
-                label="⬇️ Download Filled Meesho Template",
+                label="⬇️ Download Filled Meesho Excel",
                 data=output.getvalue(),
-                file_name="meesho_filled_template.xlsx",
+                file_name="meesho_auto_filled.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
