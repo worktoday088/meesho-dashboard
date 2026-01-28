@@ -1,9 +1,8 @@
-# 📦 Meesho Order Analysis Dashboard — COMPLETE & UPDATED v6
-# Base: newfile.py (Original)
-# New Features Added:
-# 1. Dynamic Catalog ID Filter (Detects column automatically)
-# 2. Toolkit/Tooltip Icon (?) on Financial Cards to explain calculations
-# 3. Preserved ALL previous features (SKU Groups, PDF/Excel Export, Ads Analysis)
+# 📦 Meesho Order Analysis Dashboard — Final Fixed v7
+# Fixes: HTML rendering issue (removed indentation from HTML strings),
+# Tooltips now render correctly as icons, Catalog ID, SKU Groups included.
+# Date: 2026-01-29
+# Version: full_updated_v7_final
 
 import os
 import re
@@ -34,14 +33,12 @@ try:
 except Exception:
     _kaleido_ok = False
 
-__VERSION__ = "Power By Rehan — Updated v6 (Full)"
+__VERSION__ = "Power By Rehan — Fixed v7"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
-st.caption(
-    "Full Version: SKU Groups + Catalog ID Filter + Calculation Tooltips + Exports"
-)
+st.caption("Fixed: Tooltip Display, Catalog ID Filter, SKU Groups, Reports")
 
 if not _kaleido_ok:
     st.warning("Colorful chart PDF के लिए 'kaleido' आवश्यक है → pip install kaleido")
@@ -97,16 +94,361 @@ def html_escape(s):
     import html
     return html.escape(str(s)) if s is not None else ""
 
-# --- UPDATED CARD HTML WITH TOOLTIP LOGIC ---
+# --- FIXED CARD HTML (Single line to prevent Markdown error) ---
 def _card_html(title, value, bg="#0d47a1", icon="₹", tooltip=None):
-    # This creates the (?) icon if a tooltip is provided
-    tooltip_html = ""
+    # Flattened HTML to avoid Streamlit rendering it as code block
+    tt_html = ""
     if tooltip:
-        # Standard HTML 'title' attribute works as a tooltip on hover
-        tooltip_html = f"""
-        <span title="{html_escape(tooltip)}" style="
-            cursor: help;
-            margin-left: 8px;
+        # Using a single line string strictly
+        tt_html = f'<span title="{html_escape(tooltip)}" style="cursor:help; margin-left:8px; border:1px solid rgba(255,255,255,0.8); border-radius:50%; width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; background-color:rgba(0,0,0,0.1);">?</span>'
+    
+    return f"""<div style='background:{bg}; padding:14px; border-radius:12px; color:white; text-align:center'><div style="font-size:14px; opacity:.95; display:flex; gap:6px; align-items:center; justify-content:center"><span style="font-weight:700">{icon}</span><span style="font-weight:700">{title}</span>{tt_html}</div><div style="font-size:22px; font-weight:800; margin-top:6px">{_format_display(value)}</div></div>"""
+
+def _format_display(v):
+    try:
+        if isinstance(v, (int, np.integer)):
+            return f"{v:,}"
+        if isinstance(v, (float, np.floating)):
+            return f"₹{v:,.2f}"
+        return str(v)
+    except Exception:
+        return str(v)
+
+def _date(val):
+    try:
+        d = pd.to_datetime(val, errors='coerce')
+        return "" if pd.isna(d) else str(d.date())
+    except Exception:
+        return str(val)
+
+# ---------------- SIDEBAR ----------------
+st.sidebar.header("⚙️ Controls & Filters")
+st.sidebar.caption("Tip: use the SKU Grouping to create multi-keyword selections")
+
+if 'sku_groups' not in st.session_state:
+    st.session_state['sku_groups'] = []
+
+supplier_name_input = st.sidebar.text_input(
+    "🔹 Supplier / Client Name (header)",
+    value="",
+    help="Type a label so screenshots & PDFs clearly show whose data this is."
+)
+
+up = st.sidebar.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
+if up is None:
+    st.info("Please upload Excel/CSV (sheet 'Order Payments' expected).")
+    st.stop()
+
+supplier_id_auto = extract_supplier_id_from_filename(up.name)
+
+def _render_supplier_banner(name: str, supplier_id: str):
+    import html as _html
+    name = (name or "").strip()
+    if name:
+        label = f"{_html.escape(name)} ({_html.escape(supplier_id)})" if supplier_id else _html.escape(name)
+    else:
+        label = _html.escape(supplier_id) if supplier_id else "No Supplier Selected"
+    st.markdown(
+        f"""
+        <div style="background-color:#FFEB3B; padding:12px; border-radius:12px; text-align:center;
+                    font-size:20px; font-weight:800; color:#000; margin-top:6px; margin-bottom:8px;">
+            📌 Analyzing Data for: {label}
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+_render_supplier_banner(supplier_name_input, supplier_id_auto)
+
+if st.sidebar.button("🔄 Clear All Filters"):
+    for k in list(st.session_state.keys()):
+        if k not in ['_rerun_counter', 'uploaded_files', 'sidebar_collapsed']:
+            del st.session_state[k]
+    st.session_state['sku_groups'] = []
+    st.rerun()
+
+# ---------------- READ FILES ----------------
+try:
+    orders_df, ads_df = _read_uploaded(up)
+except Exception as e:
+    st.error(f"File read error: {e}")
+    st.stop()
+
+if orders_df is None or orders_df.empty:
+    st.error("'Order Payments' data not found. Upload correct file.")
+    st.stop()
+
+orders_df.columns = [str(c).strip() for c in orders_df.columns]
+if ads_df is not None:
+    ads_df.columns = [str(c).strip() for c in ads_df.columns]
+
+# Detect columns
+status_col        = _detect_col(orders_df, ("live","order","status"), ("status",))
+order_date_col    = _detect_col(orders_df, ("order","date"))
+payment_date_col  = _detect_col(orders_df, ("payment","date"))
+dispatch_date_col = _detect_col(orders_df, ("dispatch","date"))
+sku_col           = 'Supplier SKU' if 'Supplier SKU' in orders_df.columns else _detect_col(orders_df, ("sku",))
+size_col          = 'Size' if 'Size' in orders_df.columns else _detect_col(orders_df, ("size",))
+state_col         = 'State' if 'State' in orders_df.columns else _detect_col(orders_df, ("state",))
+settle_amt_col    = _detect_col(orders_df, ("final","settlement","amount"), ("settlement","amount"))
+exchange_loss_col = _detect_col(orders_df, ("exchange","loss"))
+profit_amt_col    = _detect_col(orders_df, ("profit","amount"), ("profit",))
+# Catalog ID
+catalog_id_col    = _detect_col(orders_df, ("catalog","id"), ("catalog_id",))
+
+if not status_col:
+    st.error("Status column not detected (e.g. 'Live Order Status').")
+    st.stop()
+
+for c in [order_date_col, payment_date_col, dispatch_date_col]:
+    if c and c in orders_df.columns:
+        orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
+
+# ---------------- SIDEBAR FILTERS ----------------
+with st.sidebar.expander("🎛️ Basic Filters", expanded=True):
+    status_options = ['All', 'Delivered', 'Return', 'RTO', 'Exchange', 'Cancelled', 'Shipped', ""]
+    selected_statuses = st.multiselect("Status", options=status_options, default=['All'], key='status_multiselect')
+
+    # SKU grouping
+    if sku_col and sku_col in orders_df.columns:
+        st.markdown("**SKU Grouping**")
+        skus = sorted([str(x) for x in orders_df[sku_col].dropna().unique().tolist()])
+
+        sku_search_q = st.text_input("Search SKU keyword", value="", key='sku_search_q')
+        new_group_name = st.text_input("Group name (optional)", value=sku_search_q or "", key='sku_new_group_name')
+
+        col_a, col_b = st.columns([1,1])
+        with col_a:
+            if st.button("➕ Add Group"):
+                pattern = (sku_search_q or new_group_name or "").strip()
+                if pattern:
+                    matched_skus = [s for s in skus if pattern.lower() in s.lower()]
+                    if matched_skus:
+                        # update if exists
+                        found = False
+                        for g in st.session_state['sku_groups']:
+                            if g['name'] == (new_group_name or pattern):
+                                g['skus'] = matched_skus
+                                found = True
+                        if not found:
+                            st.session_state['sku_groups'].append({'name': new_group_name or pattern, 'skus': matched_skus})
+                        st.rerun()
+        with col_b:
+            if st.button("🧹 Clear Groups"):
+                st.session_state['sku_groups'] = []
+                st.rerun()
+
+        if st.session_state.get('sku_groups'):
+            grp_labels = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
+            chosen_group_labels = st.multiselect("Select Groups", options=grp_labels, key='sku_group_multiselect')
+            
+            selected_from_groups = []
+            for label in chosen_group_labels:
+                # simple matching by name
+                name_only = label.rpartition(' (')[0]
+                for g in st.session_state['sku_groups']:
+                    if g['name'] == name_only:
+                        selected_from_groups.extend(g['skus'])
+            
+            manual_skus = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else []
+            union_skus = sorted(list(set(selected_from_groups + manual_skus)))
+            selected_skus = st.multiselect("Selected SKU(s)", options=skus, default=union_skus, key='selected_skus')
+        else:
+            sku_opts = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else skus
+            selected_skus = st.multiselect("Select SKU(s)", options=sku_opts, key='selected_skus')
+    else:
+        selected_skus = None
+
+    # Catalog ID Filter
+    if catalog_id_col and catalog_id_col in orders_df.columns:
+        cat_ids = sorted([str(x) for x in orders_df[catalog_id_col].dropna().unique().tolist()])
+        st.markdown("---")
+        selected_cat_ids = st.multiselect("📂 Catalog ID Filter", options=cat_ids, key='selected_cat_ids')
+    else:
+        selected_cat_ids = None
+
+    if size_col:
+        size_opts = sorted([str(x) for x in orders_df[size_col].dropna().unique().tolist()])
+        selected_sizes = st.multiselect("Size", options=size_opts, key='selected_sizes')
+    else:
+        selected_sizes = None
+    
+    if state_col:
+        state_opts = sorted([str(x) for x in orders_df[state_col].dropna().unique().tolist()])
+        selected_states = st.multiselect("State", options=state_opts, key='selected_states')
+    else:
+        selected_states = None
+
+with st.sidebar.expander("📅 Date Filters", expanded=True):
+    if order_date_col:
+        od_min, od_max = pd.to_datetime(orders_df[order_date_col]).min(), pd.to_datetime(orders_df[order_date_col]).max()
+        date_range = st.date_input("Order Date Range", value=[od_min.date(), od_max.date()], key='order_date_range') if pd.notna(od_min) else None
+        group_choice = st.selectbox("Group order by", ["Month", "Day"], index=0, key='group_choice')
+    else:
+        date_range = None
+        group_choice = "Month"
+
+    if dispatch_date_col:
+        dmin, dmax = pd.to_datetime(orders_df[dispatch_date_col]).min(), pd.to_datetime(orders_df[dispatch_date_col]).max()
+        dispatch_range = st.date_input("Dispatch Date Range", value=[dmin.date(), dmax.date()], key='dispatch_date_range') if pd.notna(dmin) else None
+        dispatch_group_choice = st.selectbox("Group dispatch by", ["Month", "Day"], index=0, key='dispatch_group_choice')
+    else:
+        dispatch_range = None
+        dispatch_group_choice = "Month"
+
+# ---------------- APPLY FILTERS ----------------
+work = orders_df.copy()
+
+if order_date_col and date_range and len(date_range) == 2:
+    work = work[(work[order_date_col] >= pd.Timestamp(date_range[0])) & (work[order_date_col] <= pd.Timestamp(date_range[1]))]
+if dispatch_date_col and dispatch_range and len(dispatch_range) == 2:
+    work = work[(work[dispatch_date_col] >= pd.Timestamp(dispatch_range[0])) & (work[dispatch_date_col] <= pd.Timestamp(dispatch_range[1]))]
+
+if sku_col and selected_skus:
+    work = work[work[sku_col].astype(str).isin(selected_skus)]
+
+if catalog_id_col and selected_cat_ids:
+    work = work[work[catalog_id_col].astype(str).isin(selected_cat_ids)]
+
+if size_col and selected_sizes:
+    work = work[work[size_col].astype(str).isin(selected_sizes)]
+
+if state_col and selected_states:
+    work = work[work[state_col].astype(str).isin(selected_states)]
+
+if 'All' in selected_statuses:
+    df_f = work.copy()
+    applied_status = "All"
+else:
+    include_blank = "" in selected_statuses
+    nonblank_selected = [s for s in selected_statuses if s != ""]
+    sel_up = [s.upper() for s in nonblank_selected]
+    if sel_up and include_blank:
+        mask = work[status_col].astype(str).str.upper().isin(sel_up) | (work[status_col].isna() | (work[status_col].astype(str).str.strip() == ""))
+    elif sel_up:
+        mask = work[status_col].astype(str).str.upper().isin(sel_up)
+    else:
+        mask = (work[status_col].isna() | (work[status_col].astype(str).str.strip() == ""))
+    df_f = work[mask].copy()
+    applied_status = ",".join(selected_statuses)
+
+# RTO Logic
+def _ensure_rto_cols(df, s_col):
+    out = df.copy()
+    if s_col and 'Listing Price (Incl. taxes)' in out.columns and 'Total Sale Amount (Incl. Shipping & GST)' in out.columns:
+        mask = out[s_col].astype(str).str.upper() == 'RTO'
+        if 'Shipping Charge' not in out.columns:
+            out.loc[mask, 'Shipping Charge'] = pd.to_numeric(out.loc[mask, 'Total Sale Amount (Incl. Shipping & GST)'], errors='coerce').fillna(0) - pd.to_numeric(out.loc[mask, 'Listing Price (Incl. taxes)'], errors='coerce').fillna(0)
+        if 'RTO Amount' not in out.columns:
+            # Approximate RTO calculation if missing
+            out.loc[mask, 'RTO Amount'] = pd.to_numeric(out.loc[mask, 'Listing Price (Incl. taxes)'], errors='coerce').fillna(0) - (pd.to_numeric(out.loc[mask, 'Shipping Charge'], errors='coerce').fillna(0) * 0.18)
+    return out
+
+df_f = _ensure_rto_cols(df_f, status_col)
+
+# Caption
+st.caption(f"Status: {applied_status} | Rows: {len(df_f)} | Supplier: {supplier_name_input or supplier_id_auto}")
+
+# ---------------- STATUS CARDS ----------------
+status_labels = {'Delivered': '✅ Delivered', 'Return': '↩️ Return', 'Exchange': '🔄 Exchange', 'Cancelled': '❌ Cancelled', 'Shipped': '🚚 Shipped', 'RTO': '📪 RTO'}
+status_colors = {'Delivered': '#2e7d32', 'Return': '#c62828', 'Exchange': '#f57c00', 'Cancelled': '#616161', 'Shipped': '#1565c0', 'RTO': '#8e24aa'}
+
+counts = {s: int(df_f[status_col].astype(str).str.upper().eq(s.upper()).sum()) for s in status_labels}
+blank_mask = (df_f[status_col].isna() | (df_f[status_col].astype(str).str.strip() == ""))
+plat_rec = int(blank_mask.sum())
+grand_total = len(df_f)
+
+cols = st.columns(len(status_labels) + 2)
+for i, l in enumerate(status_labels):
+    cols[i].markdown(f"<div style='background:{status_colors[l]}; padding:10px; border-radius:8px; text-align:center; color:white'><div style='font-size:14px'>{status_labels[l]}</div><div style='font-size:22px; font-weight:700'>{counts[l]}</div></div>", unsafe_allow_html=True)
+cols[6].markdown(f"<div style='background:#37474f; padding:10px; border-radius:8px; text-align:center; color:white'><div style='font-size:14px'>📦 Platform Recovery</div><div style='font-size:22px; font-weight:700'>{plat_rec}</div></div>", unsafe_allow_html=True)
+cols[7].markdown(f"<div style='background:#0d47a1; padding:10px; border-radius:8px; text-align:center; color:white'><div style='font-size:14px'>📊 Grand Total</div><div style='font-size:22px; font-weight:700'>{grand_total}</div></div>", unsafe_allow_html=True)
+
+# ---------------- AMOUNT SUMMARY ----------------
+st.subheader("₹ Amount Summary")
+if settle_amt_col: df_f[settle_amt_col] = pd.to_numeric(df_f[settle_amt_col], errors='coerce').fillna(0)
+
+def _get_sum(stat):
+    return df_f.loc[df_f[status_col].astype(str).str.upper() == stat.upper(), settle_amt_col].sum()
+
+u_del = _get_sum('Delivered')
+u_exc = _get_sum('Exchange')
+u_can = _get_sum('Cancelled')
+u_ret = _get_sum('Return')
+u_ship = _get_sum('Shipped')
+u_rto = df_f.loc[df_f[status_col].astype(str).str.upper() == 'RTO', 'RTO Amount'].sum() if 'RTO Amount' in df_f.columns else 0.0
+blank_amt = df_f.loc[blank_mask, settle_amt_col].sum()
+
+# Calculations
+shipped_with_total = (u_del + u_can + u_ship) - (abs(u_ret) + abs(u_exc))
+u_total = (u_del + u_exc + u_can) - abs(u_ret)
+
+# Tooltips
+tt_ship = "Formula: (Delivered + Cancelled + Shipped) - (Return + Exchange)"
+tt_total = "Formula: (Delivered + Exchange + Cancelled) - Return"
+
+abox = [
+    ("Delivered ₹", u_del, "#1b5e20", "✅", None),
+    ("Exchange ₹",  u_exc, "#e65100", "🔄", None),
+    ("Cancelled ₹", u_can, "#455a64", "❌", None),
+    ("Return ₹",    u_ret, "#b71c1c", "↩️", None),
+    ("RTO ₹",       u_rto, "#6a1b9a", "📪", None),
+    ("Shipping (₹)", u_ship, "#0b3d91", "🚚", None),
+    ("Platform Recovery ₹", blank_amt, "#546e7a", "🔍", None),
+    ("Shipped With Total ₹", shipped_with_total, "#0b3d91", "🚚", tt_ship),
+    ("Total Amount ₹", u_total, "#0d47a1", "🧾", tt_total),
+]
+
+r1 = st.columns(5)
+for i in range(5):
+    r1[i].markdown(_card_html(*abox[i]), unsafe_allow_html=True)
+r2 = st.columns(4)
+for i in range(4):
+    r2[i].markdown(_card_html(*abox[i+5]), unsafe_allow_html=True)
+
+# ---------------- CHARTS ----------------
+st.markdown("---")
+_figs_for_pdf = []
+if st.checkbox("Show Data Table"):
+    st.dataframe(df_f.head(100), use_container_width=True)
+
+st.subheader("📊 Analytics")
+status_df = df_f[status_col].value_counts().reset_index()
+status_df.columns = ['Status','Count']
+fig1 = px.bar(status_df, x='Status', y='Count', color='Status', text='Count')
+st.plotly_chart(fig1, use_container_width=True)
+_figs_for_pdf.append(("Status Count", fig1))
+
+# Date Charts
+if order_date_col:
+    df_f['__odt'] = df_f[order_date_col]
+    if group_choice == 'Month':
+        g = df_f.groupby(df_f['__odt'].dt.to_period('M'))['__odt'].count().reset_index(name='Count')
+        g['__odt'] = g['__odt'].astype(str)
+    else:
+        g = df_f.groupby(df_f['__odt'].dt.date)['__odt'].count().reset_index(name='Count')
+    fig2 = px.bar(g, x='__odt', y='Count', title="Orders by Date")
+    st.plotly_chart(fig2, use_container_width=True)
+    _figs_for_pdf.append(("Orders by Date", fig2))
+
+# Return/Exchange %
+_d = counts['Delivered']
+_r = counts['Return']
+_e = counts['Exchange']
+if _d > 0:
+    st.markdown(f"**Return %**: {(_r/_d)*100:.2f}% | **Exchange %**: {(_e/_d)*100:.2f}%")
+
+# Profit
+st.markdown("---")
+st.subheader("💹 Profit")
+profit_val = _sum(df_f[profit_amt_col]) if profit_amt_col else 0.0
+exc_loss = _sum(df_f[exchange_loss_col]) if exchange_loss_col else 0.0
+net_p = profit_val - (abs(u_ret) + abs(exc_loss))
+
+c1, c2, c3, c4 = st.columns(4)
+c1.markdown(_card_html("Profit Sum", profit_val, "#1b5e20", "💹"), unsafe_allow_html=True)
+c2.markdown(_card_html("Return Loss", abs(u_ret), "#b71c1c", "➖"), unsafe_allow_html=True)
+c3.markdown(_card_html("Exchange Loss", exc_loss, "#f57c00", "🔄"), unsafe_allow_html=True)
+c4.markdown(_card_html("Net Profit", net_p, "#0d47a1", "🧮"), unsafe_allow_html=Tr            margin-left: 8px;
             border: 1px solid rgba(255,255,255,0.7);
             border-radius: 50%;
             width: 18px;
