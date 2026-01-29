@@ -1,13 +1,16 @@
-# 📦 Meesho Order Analysis Dashboard — Final Master v14
-# Restored: SKU Groups, Dispatch Date, Ads Per Order Cost, Return % Layout.
-# Added: Catalog ID, Full Data Preview, Mobile Tooltips (Full Text).
-# Charts: Bar Charts Only (for speed).
+# 📦 Meesho Order Analysis Dashboard — Final v15
+# Updates:
+# 1. Recovery Logic: Uses 'Recovery' column (summing absolute values).
+# 2. Claims Logic: Added 'Claims' column, filter, and display cards.
+# 3. Ads Logic: Added Total Orders & Per Order Cost.
+# 4. RTO Logic: Restored 3-column calculation (Shipping Charge, GST, RTO Amount).
+# 5. Order Source: Added Filter next to Date Range.
+# 6. PDF Removed: Only Excel export remains.
 # Date: 2026-01-29
 
 import os
 import re
 import math
-import tempfile
 from io import BytesIO
 from datetime import datetime, date
 
@@ -17,31 +20,12 @@ import streamlit as st
 import plotly.express as px
 from PIL import Image
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
-# Optional libs
-try:
-    from PyPDF2 import PdfMerger
-    _pdf_merge_ok = True
-except Exception:
-    _pdf_merge_ok = False
-
-try:
-    import kaleido
-    _kaleido_ok = True
-except Exception:
-    _kaleido_ok = False
-
-__VERSION__ = "Power By Rehan — Master v14"
+__VERSION__ = "Power By Rehan — v15 (Recovery/Claims/RTO Fix)"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
-st.caption("Features: SKU Groups | Dispatch Filter | Catalog ID | Ads Analysis | Full Data Export")
-
-if not _kaleido_ok:
-    st.warning("⚠️ For PDF Charts: Please install kaleido -> `pip install kaleido`")
+st.caption("New Logic: Recovery (Abs) | Claims | Order Source | RTO (3-Col) | Ads Per Order")
 
 # ---------------- HELPERS ----------------
 def extract_supplier_id_from_filename(filename: str) -> str:
@@ -130,8 +114,16 @@ sku_col = _detect_col(orders_df, ("supplier","sku"), ("sku",))
 settle_amt_col = _detect_col(orders_df, ("final","settlement"), ("settlement","amount"))
 exchange_loss_col = _detect_col(orders_df, ("exchange","loss"))
 profit_amt_col = _detect_col(orders_df, ("profit",))
-# NEW: Catalog ID
 catalog_id_col = _detect_col(orders_df, ("catalog","id"), ("catalog_id",))
+
+# NEW COLUMNS
+recovery_col = _detect_col(orders_df, ("recovery",))
+claims_col = _detect_col(orders_df, ("claims",))
+order_source_col = _detect_col(orders_df, ("order","source"))
+
+# RTO Logic Cols
+listing_price_col = _detect_col(orders_df, ("listing","price"))
+total_sale_col = _detect_col(orders_df, ("total","sale","amount"))
 
 if not status_col:
     st.error("Status column not found!")
@@ -142,17 +134,15 @@ for c in [order_date_col, dispatch_date_col]:
     if c and c in orders_df.columns:
         orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
 
-# ---------------- FILTERS (RESTORED ALL) ----------------
+# ---------------- FILTERS ----------------
 with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
     # 1. Status
     status_opts = ['All', 'Delivered', 'Return', 'RTO', 'Exchange', 'Cancelled', 'Shipped', ""]
     sel_statuses = st.multiselect("Status", status_opts, default=['All'])
     
-    # 2. SKU Grouping (Restored Full Logic)
+    # 2. SKU Grouping
     if sku_col:
-        st.markdown("**SKU Search & Grouping**")
         skus = sorted([str(x) for x in orders_df[sku_col].dropna().unique().tolist()])
-        
         sku_search_q = st.text_input("Search SKU keyword", key='sku_search_q')
         new_group_name = st.text_input("Group name (Optional)", key='sku_new_group_name')
 
@@ -181,14 +171,27 @@ with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
                     if g['name'] == g_name:
                         active_skus.extend(g['skus'])
         
-        # Manual Selection
         manual_matches = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else []
         final_pool = sorted(list(set(active_skus + manual_matches)))
         sel_skus = st.multiselect("Selected SKUs", skus, default=final_pool)
     else:
         sel_skus = None
     
-    # 3. Catalog ID (New)
+    # 3. Claims & Recovery Filters (Requested)
+    if claims_col:
+        claims_opts = sorted([str(x) for x in orders_df[claims_col].dropna().unique().tolist()])
+        st.markdown("---")
+        sel_claims = st.multiselect("📂 Filter Claims", claims_opts)
+    else:
+        sel_claims = None
+
+    if recovery_col:
+        rec_opts = sorted([str(x) for x in orders_df[recovery_col].dropna().unique().tolist()])
+        sel_recovery = st.multiselect("📂 Filter Recovery", rec_opts)
+    else:
+        sel_recovery = None
+
+    # 4. Catalog ID
     if catalog_id_col:
         st.markdown("---")
         cats = sorted([str(x) for x in orders_df[catalog_id_col].dropna().unique().tolist()])
@@ -196,7 +199,7 @@ with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
     else:
         sel_cats = None
 
-with st.sidebar.expander("📅 Date Filters (Restored)", expanded=True):
+with st.sidebar.expander("📅 Date & Source Filters", expanded=True):
     # Order Date
     date_range = None
     if order_date_col:
@@ -204,7 +207,13 @@ with st.sidebar.expander("📅 Date Filters (Restored)", expanded=True):
         if pd.notna(dmin):
             date_range = st.date_input("Order Date Range", [dmin, dmax])
     
-    # Dispatch Date (Restored)
+    # NEW: Order Source Filter (Next to Date)
+    sel_source = None
+    if order_source_col:
+        sources = sorted([str(x) for x in orders_df[order_source_col].dropna().unique().tolist()])
+        sel_source = st.multiselect("Order Source", sources, default=None, help="Leave empty for All")
+
+    # Dispatch Date
     dispatch_range = None
     if dispatch_date_col:
         ddmin, ddmax = orders_df[dispatch_date_col].min(), orders_df[dispatch_date_col].max()
@@ -220,11 +229,20 @@ if order_date_col and date_range and len(date_range)==2:
 if dispatch_date_col and dispatch_range and len(dispatch_range)==2:
     df_f = df_f[(df_f[dispatch_date_col] >= pd.Timestamp(dispatch_range[0])) & (df_f[dispatch_date_col] <= pd.Timestamp(dispatch_range[1]))]
 
+if order_source_col and sel_source:
+    df_f = df_f[df_f[order_source_col].astype(str).isin(sel_source)]
+
 if sku_col and sel_skus:
     df_f = df_f[df_f[sku_col].astype(str).isin(sel_skus)]
 
 if catalog_id_col and sel_cats:
     df_f = df_f[df_f[catalog_id_col].astype(str).isin(sel_cats)]
+
+if claims_col and sel_claims:
+    df_f = df_f[df_f[claims_col].astype(str).isin(sel_claims)]
+
+if recovery_col and sel_recovery:
+    df_f = df_f[df_f[recovery_col].astype(str).isin(sel_recovery)]
 
 if 'All' not in sel_statuses:
     clean_stats = [s.upper() for s in sel_statuses if s]
@@ -237,15 +255,25 @@ if 'All' not in sel_statuses:
         mask = df_f[status_col].isna()
     df_f = df_f[mask]
 
-# ---------------- RTO & CALCS ----------------
+# ---------------- RTO LOGIC (3-COLUMNS RESTORED) ----------------
 def _ensure_rto(df):
-    if 'RTO Amount' not in df.columns and 'Listing Price (Incl. taxes)' in df.columns:
+    if listing_price_col and total_sale_col:
         mask = df[status_col].astype(str).str.upper() == 'RTO'
-        df.loc[mask, 'RTO Amount'] = pd.to_numeric(df.loc[mask, 'Listing Price (Incl. taxes)'], errors='coerce').fillna(0) * 0.8
+        
+        # Col 1: Shipping Charge (Total Sale - Listing)
+        df.loc[mask, 'Shipping Charge'] = pd.to_numeric(df.loc[mask, total_sale_col], errors='coerce').fillna(0) - pd.to_numeric(df.loc[mask, listing_price_col], errors='coerce').fillna(0)
+        
+        # Col 2: Shipping GST (approx 18%)
+        df.loc[mask, 'Shipping GST'] = df.loc[mask, 'Shipping Charge'] * 0.18
+        
+        # Col 3: RTO Amount (Listing - GST)
+        df.loc[mask, 'RTO Amount'] = pd.to_numeric(df.loc[mask, listing_price_col], errors='coerce').fillna(0) - df.loc[mask, 'Shipping GST']
+        
     return df
 
 df_f = _ensure_rto(df_f)
 
+# Counts
 counts = df_f[status_col].astype(str).str.upper().value_counts()
 c_del = counts.get('DELIVERED', 0)
 c_ret = counts.get('RETURN', 0)
@@ -253,14 +281,19 @@ c_exc = counts.get('EXCHANGE', 0)
 c_can = counts.get('CANCELLED', 0)
 c_shp = counts.get('SHIPPED', 0)
 c_rto = counts.get('RTO', 0)
-c_blank = df_f[status_col].isna().sum()
+
+# Claims Count
+c_claim = df_f[claims_col].count() if claims_col else 0
+# Recovery Count
+c_rec = df_f[recovery_col].count() if recovery_col else 0
+
 total_rows = len(df_f)
 
 # Card Row 1
 status_labels = [('✅ Delivered', c_del, '#2e7d32'), ('↩️ Return', c_ret, '#c62828'), 
                  ('🔄 Exchange', c_exc, '#f57c00'), ('❌ Cancelled', c_can, '#616161'),
                  ('🚚 Shipped', c_shp, '#1565c0'), ('📪 RTO', c_rto, '#8e24aa'),
-                 ('📦 Recovery', c_blank, '#37474f'), ('📊 Total', total_rows, '#0d47a1')]
+                 ('🤕 Claims', c_claim, '#F9A825'), ('📊 Total', total_rows, '#0d47a1')]
 
 cols = st.columns(8)
 for i, (l, v, c) in enumerate(status_labels):
@@ -278,8 +311,16 @@ if settle_amt_col:
     a_can = get_sum('CANCELLED')
     a_ret = get_sum('RETURN')
     a_shp = get_sum('SHIPPED')
-    a_rec = df_f[df_f[status_col].isna()][settle_amt_col].sum()
+    
+    # RTO Amount from 3-column logic
     a_rto = df_f[df_f[status_col].astype(str).str.upper() == 'RTO']['RTO Amount'].sum() if 'RTO Amount' in df_f.columns else 0
+
+    # NEW: Claims Amount (Sum of Claims column)
+    a_claims = pd.to_numeric(df_f[claims_col], errors='coerce').fillna(0).sum() if claims_col else 0
+    
+    # NEW: Recovery Amount (Sum of Recovery column - ABSOLUTE VALUE)
+    raw_rec = pd.to_numeric(df_f[recovery_col], errors='coerce').fillna(0).sum() if recovery_col else 0
+    a_rec = abs(raw_rec) # As requested: -100 becomes 100
 
     shipped_with_total = (a_del + a_can + a_shp) - (abs(a_ret) + abs(a_exc))
     u_total = (a_del + a_exc + a_can) - abs(a_ret)
@@ -294,18 +335,19 @@ if settle_amt_col:
     r1[3].markdown(_card_html("Return ₹", a_ret, "#b71c1c"), unsafe_allow_html=True)
     r1[4].markdown(_card_html("RTO ₹", a_rto, "#6a1b9a"), unsafe_allow_html=True)
 
-    r2 = st.columns(4)
+    r2 = st.columns(5)
     r2[0].markdown(_card_html("Shipping ₹", a_shp, "#0b3d91"), unsafe_allow_html=True)
     r2[1].markdown(_card_html("Recovery ₹", a_rec, "#546e7a"), unsafe_allow_html=True)
-    r2[2].markdown(_card_html("Shipped Total", shipped_with_total, "#0b3d91", "🚚", tt_ship), unsafe_allow_html=True)
-    r2[3].markdown(_card_html("Total Amount", u_total, "#0d47a1", "🧾", tt_tot), unsafe_allow_html=True)
+    r2[2].markdown(_card_html("Claims ₹", a_claims, "#F9A825"), unsafe_allow_html=True)
+    r2[3].markdown(_card_html("Shipped Total", shipped_with_total, "#0b3d91", "🚚", tt_ship), unsafe_allow_html=True)
+    r2[4].markdown(_card_html("Total Amount", u_total, "#0d47a1", "🧾", tt_tot), unsafe_allow_html=True)
 
-    # --- MOBILE TOOLTIP (FULL TEXT RESTORED) ---
     with st.expander("ℹ️ Click here to see Calculation Formulas (Mobile Friendly)"):
         st.markdown(f"""
         **Shipped With Total:** `(Delivered + Cancelled + Shipped) - (Return + Exchange)`
-        
         **Total Amount:** `(Delivered + Exchange + Cancelled) - Return Amount`
+        **Recovery:** Sum of 'Recovery' column (converted to Positive).
+        **Claims:** Sum of 'Claims' column.
         """)
 
 # ---------------- PROFIT ----------------
@@ -321,7 +363,7 @@ p2.markdown(_card_html("Return Loss", abs(a_ret), "#b71c1c", "➖"), unsafe_allo
 p3.markdown(_card_html("Exchange Loss", exc_loss_val, "#f57c00", "🔄"), unsafe_allow_html=True)
 p4.markdown(_card_html("Net Profit", net_profit, "#0d47a1", "🧮"), unsafe_allow_html=True)
 
-# ---------------- RETURN % (OLD STYLE RESTORED) ----------------
+# ---------------- RETURN % ----------------
 st.markdown("---")
 st.subheader("📊 Return & Exchange Percentage")
 
@@ -337,9 +379,9 @@ rp1.markdown(f"<div style='background:#1565c0;padding:16px;border-radius:12px;co
 rp2.markdown(f"<div style='background:#c62828;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Return</div><div style='font-size:28px'>{c_ret}</div><div>{ret_pct:.2f}%</div></div>", unsafe_allow_html=True)
 rp3.markdown(f"<div style='background:#ef6c00;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Exchange</div><div style='font-size:28px'>{c_exc}</div><div>{exc_pct:.2f}%</div></div>", unsafe_allow_html=True)
 
-# ---------------- ADS (PER ORDER COST RESTORED) ----------------
+# ---------------- ADS ANALYSIS (UPDATED) ----------------
 st.markdown("---")
-st.subheader("📢 Ads Analysis (With Per Order Cost)")
+st.subheader("📢 Ads Cost Analysis")
 ads_table = None
 
 if ads_df is not None and not ads_df.empty:
@@ -354,54 +396,59 @@ if ads_df is not None and not ads_df.empty:
         if len(ads_rng) == 2:
             ads_f = ads_df[(ads_df['Deduction Duration'] >= ads_rng[0]) & (ads_df['Deduction Duration'] <= ads_rng[1])].copy()
             
-            # --- NEW: ADS PER ORDER CALCULATION ---
-            if order_date_col:
-                # Calculate daily orders count from the main orders df
-                daily_orders = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Daily Orders')
-                daily_orders.columns = ['Deduction Duration', 'Daily Orders']
-                
-                # Merge with Ads Data
-                ads_f = pd.merge(ads_f, daily_orders, on='Deduction Duration', how='left').fillna(0)
-                
-                # Calculate Per Order Cost
-                ads_f['Per Order Cost'] = ads_f.apply(lambda row: row['Total Ads Cost'] / row['Daily Orders'] if row['Daily Orders'] > 0 else 0, axis=1)
-
+            # --- ADS METRICS ---
             ads_total = ads_f['Total Ads Cost'].sum()
-            st.markdown(_card_html("Total Ads Spend", ads_total, "#4a148c", "📣"), unsafe_allow_html=True)
             
-            fig_ads = px.bar(ads_f, x='Deduction Duration', y='Total Ads Cost', title="Daily Ads Spend")
+            # 1. Calculate Total Orders for this period (using main filtered df or based on date match)
+            # Strategy: Sum orders from df_f (since it's already date filtered if user selected same dates)
+            # OR better: Count orders occurring on the dates present in ads_f to be precise
+            
+            # Aggregate orders by date from main dataframe
+            daily_orders = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Daily Orders')
+            daily_orders.columns = ['Deduction Duration', 'Daily Orders']
+            
+            # Merge to calculate per day
+            merged_ads = pd.merge(ads_f, daily_orders, on='Deduction Duration', how='left').fillna(0)
+            
+            total_orders_in_period = merged_ads['Daily Orders'].sum()
+            per_order_cost = ads_total / total_orders_in_period if total_orders_in_period > 0 else 0
+            
+            # Display 3 Boxes
+            ac1, ac2, ac3 = st.columns(3)
+            ac1.markdown(_card_html("Total Ads Spend", ads_total, "#4a148c", "📣"), unsafe_allow_html=True)
+            ac2.markdown(_card_html("Total Orders", total_orders_in_period, "#6A1B9A", "📦"), unsafe_allow_html=True)
+            ac3.markdown(_card_html("Per Order Cost", per_order_cost, "#8E24AA", "🏷️"), unsafe_allow_html=True)
+
+            fig_ads = px.bar(merged_ads, x='Deduction Duration', y='Total Ads Cost', title="Daily Ads Spend")
             st.plotly_chart(fig_ads, use_container_width=True)
             
-            ads_table = ads_f
-            st.dataframe(ads_f, use_container_width=True)
+            st.dataframe(merged_ads, use_container_width=True)
+            ads_table = merged_ads
     else:
         st.warning("Ads sheet missing required columns.")
+else:
+    st.info("No Ads Data found in file.")
 
-# ---------------- DATA PREVIEW (FULL DATA) ----------------
+# ---------------- FULL DATA PREVIEW ----------------
 st.markdown("---")
 st.subheader("🔎 Full Data Preview")
-# No limits on head()
-if st.checkbox("Show All Filtered Data"):
+if st.checkbox("Show All Filtered Data", value=True):
     st.dataframe(df_f, use_container_width=True)
 
-# ---------------- CHARTS (BAR ONLY) ----------------
+# ---------------- CHARTS ----------------
 st.markdown("---")
-_figs_for_pdf = []
-
 c1, c2 = st.columns(2)
 with c1:
     status_counts_df = df_f[status_col].fillna("BLANK").value_counts().reset_index()
     status_counts_df.columns = ['Status', 'Count']
     fig1 = px.bar(status_counts_df, x='Status', y='Count', text='Count', title="Live Order Status")
     st.plotly_chart(fig1, use_container_width=True)
-    _figs_for_pdf.append(("Status", fig1))
 
 with c2:
     if order_date_col:
         date_counts = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Orders')
         fig2 = px.bar(date_counts, x=order_date_col, y='Orders', text='Orders', title="Orders Timeline")
         st.plotly_chart(fig2, use_container_width=True)
-        _figs_for_pdf.append(("Timeline", fig2))
 
 # ---------------- EXPORTS ----------------
 st.markdown("---")
@@ -410,37 +457,9 @@ st.subheader("📥 Downloads")
 buffer = BytesIO()
 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
     df_f.to_excel(writer, sheet_name='Filtered Data', index=False)
-    pd.DataFrame({'Metric':['Net Amount', 'Shipped Total', 'Net Profit'], 'Value':[u_total, shipped_with_total, net_profit]}).to_excel(writer, sheet_name='Summary')
+    pd.DataFrame({'Metric':['Net Amount', 'Shipped Total', 'Net Profit', 'Claims', 'Recovery'], 'Value':[u_total, shipped_with_total, net_profit, a_claims, a_rec]}).to_excel(writer, sheet_name='Summary')
     if ads_table is not None: ads_table.to_excel(writer, sheet_name='Ads Analysis', index=False)
 
-st.download_button("⬇️ Download Excel", data=buffer.getvalue(), file_name="Meesho_Report_v14.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button("⬇️ Download Excel Report", data=buffer.getvalue(), file_name="Meesho_Report_v15.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-if _kaleido_ok:
-    def _create_pdf():
-        import tempfile
-        t = tempfile.mkdtemp()
-        fname = os.path.join(t, "report.pdf")
-        with PdfPages(fname) as pdf:
-            fig = plt.figure(figsize=(10,6))
-            plt.axis('off')
-            plt.text(0.5, 0.9, f"Report: {_supplier_label}", ha='center', fontsize=16)
-            plt.text(0.5, 0.7, f"Total Amount: {u_total}", ha='center', fontsize=14)
-            plt.text(0.5, 0.5, f"Return %: {ret_pct:.2f}%", ha='center', fontsize=14)
-            pdf.savefig(fig)
-            plt.close()
-            for title, f in _figs_for_pdf:
-                try:
-                    img_bytes = f.to_image(format="png", width=1200, height=800, scale=2)
-                    img = Image.open(BytesIO(img_bytes))
-                    fig2 = plt.figure(figsize=(10,6))
-                    plt.axis('off')
-                    plt.imshow(img)
-                    plt.title(title)
-                    pdf.savefig(fig2)
-                    plt.close()
-                except: pass
-        with open(fname, "rb") as f:
-            return f.read()
-    st.download_button("⬇️ Download PDF", data=_create_pdf(), file_name="Report_v14.pdf", mime="application/pdf")
-
-st.success("✅ Dashboard Restored & Updated: Old Return Style, All Filters, Ads Per Order, Full Data Preview.")
+st.success("✅ Dashboard Ready (v15): Recovery (Abs), Claims, Order Source, RTO 3-Col, Ads Per Order Cost.")
