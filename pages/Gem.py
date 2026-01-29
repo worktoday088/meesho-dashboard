@@ -1,11 +1,11 @@
-# 📦 Meesho Order Analysis Dashboard — Final v15
-# Updates:
-# 1. Recovery Logic: Uses 'Recovery' column (summing absolute values).
-# 2. Claims Logic: Added 'Claims' column, filter, and display cards.
-# 3. Ads Logic: Added Total Orders & Per Order Cost.
-# 4. RTO Logic: Restored 3-column calculation (Shipping Charge, GST, RTO Amount).
-# 5. Order Source: Added Filter next to Date Range.
-# 6. PDF Removed: Only Excel export remains.
+# 📦 Meesho Order Analysis Dashboard — Master v19
+# FIX: SKU Grouping Logic Replaced with 'nm.py' Logic (100% Working).
+# Features:
+# - Multi-Group Selection with Auto-Update.
+# - Claims/Recovery Counts (Ignoring Zeros).
+# - True Profit Analysis.
+# - Ads Per Order Cost.
+# - Mobile Tooltips.
 # Date: 2026-01-29
 
 import os
@@ -20,12 +20,12 @@ import streamlit as st
 import plotly.express as px
 from PIL import Image
 
-__VERSION__ = "Power By Rehan — v15 (Recovery/Claims/RTO Fix)"
+__VERSION__ = "Power By Rehan — v19 (Grouping Fixed)"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
-st.caption("New Logic: Recovery (Abs) | Claims | Order Source | RTO (3-Col) | Ads Per Order")
+st.caption("Final Version: Exact SKU Grouping from nm.py + All Advanced Features")
 
 # ---------------- HELPERS ----------------
 def extract_supplier_id_from_filename(filename: str) -> str:
@@ -77,6 +77,7 @@ def _card_html(title, value, bg="#0d47a1", icon="₹", tooltip=None):
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙️ Controls")
 
+# Session state for groups
 if 'sku_groups' not in st.session_state: st.session_state['sku_groups'] = []
 
 supplier_name_input = st.sidebar.text_input("🔹 Supplier Name", value="")
@@ -89,6 +90,11 @@ if up is None:
 supplier_id_auto = extract_supplier_id_from_filename(up.name)
 _supplier_label = f"{supplier_name_input} ({supplier_id_auto})" if supplier_id_auto else supplier_name_input
 st.markdown(f"<div style='background-color:#FFEB3B;padding:10px;border-radius:10px;text-align:center;color:black;font-weight:bold;margin-bottom:10px'>📌 Analyzing: {_supplier_label}</div>", unsafe_allow_html=True)
+
+# --- PRODUCT COST INPUT ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💰 Profit Settings")
+user_product_cost = st.sidebar.number_input("Enter Product Cost (Per Unit) ₹", min_value=0.0, value=0.0, step=10.0)
 
 if st.sidebar.button("🔄 Reset Filters"):
     for key in list(st.session_state.keys()):
@@ -115,13 +121,9 @@ settle_amt_col = _detect_col(orders_df, ("final","settlement"), ("settlement","a
 exchange_loss_col = _detect_col(orders_df, ("exchange","loss"))
 profit_amt_col = _detect_col(orders_df, ("profit",))
 catalog_id_col = _detect_col(orders_df, ("catalog","id"), ("catalog_id",))
-
-# NEW COLUMNS
 recovery_col = _detect_col(orders_df, ("recovery",))
 claims_col = _detect_col(orders_df, ("claims",))
 order_source_col = _detect_col(orders_df, ("order","source"))
-
-# RTO Logic Cols
 listing_price_col = _detect_col(orders_df, ("listing","price"))
 total_sale_col = _detect_col(orders_df, ("total","sale","amount"))
 
@@ -134,60 +136,82 @@ for c in [order_date_col, dispatch_date_col]:
     if c and c in orders_df.columns:
         orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
 
+# Clean Numeric Columns
+if claims_col: orders_df[claims_col] = pd.to_numeric(orders_df[claims_col], errors='coerce').fillna(0)
+if recovery_col: orders_df[recovery_col] = pd.to_numeric(orders_df[recovery_col], errors='coerce').fillna(0)
+
 # ---------------- FILTERS ----------------
 with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
     # 1. Status
     status_opts = ['All', 'Delivered', 'Return', 'RTO', 'Exchange', 'Cancelled', 'Shipped', ""]
     sel_statuses = st.multiselect("Status", status_opts, default=['All'])
     
-    # 2. SKU Grouping
+    # =========================================================
+    # 2. SKU Grouping (LOGIC IMPORTED FROM NM.PY - FULL FIX)
+    # =========================================================
+    selected_skus = None
     if sku_col:
-        skus = sorted([str(x) for x in orders_df[sku_col].dropna().unique().tolist()])
-        sku_search_q = st.text_input("Search SKU keyword", key='sku_search_q')
-        new_group_name = st.text_input("Group name (Optional)", key='sku_new_group_name')
+        orders_df[sku_col] = orders_df[sku_col].astype(str)
+        all_skus = sorted(orders_df[sku_col].dropna().unique())
 
-        c_grp1, c_grp2 = st.columns(2)
-        with c_grp1:
-            if st.button("➕ Add Group"):
-                pattern = (sku_search_q or new_group_name).strip()
-                if pattern:
-                    matched = [s for s in skus if pattern.lower() in s.lower()]
-                    if matched:
-                        st.session_state['sku_groups'].append({'name': new_group_name or pattern, 'skus': matched})
-                        st.rerun()
-        with c_grp2:
+        st.markdown("**SKU Grouping & Search**")
+        search_kw = st.text_input("Search SKU keyword")
+        matches = [s for s in all_skus if search_kw.lower() in s.lower()] if search_kw else []
+
+        group_name = st.text_input("Group Name", value=search_kw)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("➕ Add / Update"):
+                if group_name and matches:
+                    found = False
+                    for g in st.session_state["sku_groups"]:
+                        if g["name"] == group_name:
+                            g["skus"] = matches
+                            found = True
+                    if not found:
+                        st.session_state["sku_groups"].append({"name": group_name, "skus": matches})
+                    st.rerun()
+        with c2:
             if st.button("🧹 Clear All"):
-                st.session_state['sku_groups'] = []
+                st.session_state["sku_groups"] = []
+                if "selected_skus" in st.session_state:
+                    del st.session_state["selected_skus"]
                 st.rerun()
-        
-        # Group Selection
-        active_skus = []
-        if st.session_state['sku_groups']:
-            grp_labels = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
-            sel_grps = st.multiselect("Select Groups", grp_labels)
-            for label in sel_grps:
-                g_name = label.rsplit(" (", 1)[0]
-                for g in st.session_state['sku_groups']:
-                    if g['name'] == g_name:
-                        active_skus.extend(g['skus'])
-        
-        manual_matches = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else []
-        final_pool = sorted(list(set(active_skus + manual_matches)))
-        sel_skus = st.multiselect("Selected SKUs", skus, default=final_pool)
-    else:
-        sel_skus = None
+
+        # -------- GROUP SELECTION LOGIC --------
+        if st.session_state["sku_groups"]:
+            labels = [f"{i+1}. {g['name']} ({len(g['skus'])})" for i, g in enumerate(st.session_state["sku_groups"])]
+            
+            chosen_groups = st.multiselect("Select Groups", labels)
+            include_live = st.checkbox("Include live keyword matches", value=True)
+
+            group_skus = []
+            for lab in chosen_groups:
+                idx = int(lab.split(".")[0]) - 1
+                group_skus.extend(st.session_state["sku_groups"][idx]["skus"])
+
+            manual = matches if include_live else []
+            final_skus = sorted(set(group_skus + manual))
+
+            # The 'default' param here ensures the box below updates automatically
+            selected_skus = st.multiselect("Selected SKU(s)", all_skus, default=final_skus, key="selected_skus")
+        else:
+            # Standard logic if no groups exist
+            sku_opts = [s for s in all_skus if search_kw.lower() in s.lower()] if search_kw else all_skus
+            selected_skus = st.multiselect("Selected SKU(s)", all_skus, key="selected_skus")
     
-    # 3. Claims & Recovery Filters (Requested)
+    # 3. Claims & Recovery
     if claims_col:
-        claims_opts = sorted([str(x) for x in orders_df[claims_col].dropna().unique().tolist()])
+        claims_vals = sorted(orders_df[orders_df[claims_col] != 0][claims_col].unique().tolist())
         st.markdown("---")
-        sel_claims = st.multiselect("📂 Filter Claims", claims_opts)
+        sel_claims = st.multiselect("📂 Filter Claims (Values)", claims_vals, help="Leave empty for All")
     else:
         sel_claims = None
 
     if recovery_col:
-        rec_opts = sorted([str(x) for x in orders_df[recovery_col].dropna().unique().tolist()])
-        sel_recovery = st.multiselect("📂 Filter Recovery", rec_opts)
+        rec_vals = sorted(orders_df[orders_df[recovery_col] != 0][recovery_col].unique().tolist())
+        sel_recovery = st.multiselect("📂 Filter Recovery (Values)", rec_vals, help="Leave empty for All")
     else:
         sel_recovery = None
 
@@ -200,20 +224,17 @@ with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
         sel_cats = None
 
 with st.sidebar.expander("📅 Date & Source Filters", expanded=True):
-    # Order Date
     date_range = None
     if order_date_col:
         dmin, dmax = orders_df[order_date_col].min(), orders_df[order_date_col].max()
         if pd.notna(dmin):
             date_range = st.date_input("Order Date Range", [dmin, dmax])
     
-    # NEW: Order Source Filter (Next to Date)
     sel_source = None
     if order_source_col:
         sources = sorted([str(x) for x in orders_df[order_source_col].dropna().unique().tolist()])
         sel_source = st.multiselect("Order Source", sources, default=None, help="Leave empty for All")
 
-    # Dispatch Date
     dispatch_range = None
     if dispatch_date_col:
         ddmin, ddmax = orders_df[dispatch_date_col].min(), orders_df[dispatch_date_col].max()
@@ -232,17 +253,17 @@ if dispatch_date_col and dispatch_range and len(dispatch_range)==2:
 if order_source_col and sel_source:
     df_f = df_f[df_f[order_source_col].astype(str).isin(sel_source)]
 
-if sku_col and sel_skus:
-    df_f = df_f[df_f[sku_col].astype(str).isin(sel_skus)]
+if sku_col and selected_skus:
+    df_f = df_f[df_f[sku_col].astype(str).isin(selected_skus)]
 
 if catalog_id_col and sel_cats:
     df_f = df_f[df_f[catalog_id_col].astype(str).isin(sel_cats)]
 
 if claims_col and sel_claims:
-    df_f = df_f[df_f[claims_col].astype(str).isin(sel_claims)]
+    df_f = df_f[df_f[claims_col].isin(sel_claims)]
 
 if recovery_col and sel_recovery:
-    df_f = df_f[df_f[recovery_col].astype(str).isin(sel_recovery)]
+    df_f = df_f[df_f[recovery_col].isin(sel_recovery)]
 
 if 'All' not in sel_statuses:
     clean_stats = [s.upper() for s in sel_statuses if s]
@@ -255,25 +276,18 @@ if 'All' not in sel_statuses:
         mask = df_f[status_col].isna()
     df_f = df_f[mask]
 
-# ---------------- RTO LOGIC (3-COLUMNS RESTORED) ----------------
+# ---------------- RTO LOGIC ----------------
 def _ensure_rto(df):
     if listing_price_col and total_sale_col:
         mask = df[status_col].astype(str).str.upper() == 'RTO'
-        
-        # Col 1: Shipping Charge (Total Sale - Listing)
         df.loc[mask, 'Shipping Charge'] = pd.to_numeric(df.loc[mask, total_sale_col], errors='coerce').fillna(0) - pd.to_numeric(df.loc[mask, listing_price_col], errors='coerce').fillna(0)
-        
-        # Col 2: Shipping GST (approx 18%)
         df.loc[mask, 'Shipping GST'] = df.loc[mask, 'Shipping Charge'] * 0.18
-        
-        # Col 3: RTO Amount (Listing - GST)
         df.loc[mask, 'RTO Amount'] = pd.to_numeric(df.loc[mask, listing_price_col], errors='coerce').fillna(0) - df.loc[mask, 'Shipping GST']
-        
     return df
 
 df_f = _ensure_rto(df_f)
 
-# Counts
+# ---------------- COUNTS ----------------
 counts = df_f[status_col].astype(str).str.upper().value_counts()
 c_del = counts.get('DELIVERED', 0)
 c_ret = counts.get('RETURN', 0)
@@ -282,22 +296,31 @@ c_can = counts.get('CANCELLED', 0)
 c_shp = counts.get('SHIPPED', 0)
 c_rto = counts.get('RTO', 0)
 
-# Claims Count
-c_claim = df_f[claims_col].count() if claims_col else 0
-# Recovery Count
-c_rec = df_f[recovery_col].count() if recovery_col else 0
+# Claims/Recovery Count (Ignoring Zeros)
+c_claim = 0
+if claims_col:
+    c_claim = df_f[df_f[claims_col] != 0].shape[0]
 
-total_rows = len(df_f)
+c_rec = 0
+if recovery_col:
+    c_rec = df_f[df_f[recovery_col] != 0].shape[0]
+
+grand_total_count = len(df_f)
 
 # Card Row 1
 status_labels = [('✅ Delivered', c_del, '#2e7d32'), ('↩️ Return', c_ret, '#c62828'), 
                  ('🔄 Exchange', c_exc, '#f57c00'), ('❌ Cancelled', c_can, '#616161'),
                  ('🚚 Shipped', c_shp, '#1565c0'), ('📪 RTO', c_rto, '#8e24aa'),
-                 ('🤕 Claims', c_claim, '#F9A825'), ('📊 Total', total_rows, '#0d47a1')]
+                 ('🤕 Claims', c_claim, '#F9A825'), ('🔁 Recovery', c_rec, '#546E7A')]
 
 cols = st.columns(8)
 for i, (l, v, c) in enumerate(status_labels):
     cols[i].markdown(f"<div style='background:{c};padding:8px;border-radius:8px;text-align:center;color:white;font-size:12px;'><b>{l}</b><br><span style='font-size:18px'>{v}</span></div>", unsafe_allow_html=True)
+
+# Grand Total Row
+st.markdown(f"""<div style='background-color:#0d47a1;padding:10px;border-radius:8px;text-align:center;color:white;margin-bottom:15px;margin-top:5px'>
+<div style="font-size:16px;font-weight:bold">📊 Grand Total Orders: {grand_total_count}</div>
+</div>""", unsafe_allow_html=True)
 
 # ---------------- FINANCIALS ----------------
 st.subheader("₹ Financial Summary")
@@ -311,16 +334,10 @@ if settle_amt_col:
     a_can = get_sum('CANCELLED')
     a_ret = get_sum('RETURN')
     a_shp = get_sum('SHIPPED')
-    
-    # RTO Amount from 3-column logic
     a_rto = df_f[df_f[status_col].astype(str).str.upper() == 'RTO']['RTO Amount'].sum() if 'RTO Amount' in df_f.columns else 0
 
-    # NEW: Claims Amount (Sum of Claims column)
-    a_claims = pd.to_numeric(df_f[claims_col], errors='coerce').fillna(0).sum() if claims_col else 0
-    
-    # NEW: Recovery Amount (Sum of Recovery column - ABSOLUTE VALUE)
-    raw_rec = pd.to_numeric(df_f[recovery_col], errors='coerce').fillna(0).sum() if recovery_col else 0
-    a_rec = abs(raw_rec) # As requested: -100 becomes 100
+    a_claims = df_f[claims_col].sum() if claims_col else 0
+    a_rec = abs(df_f[recovery_col].sum()) if recovery_col else 0
 
     shipped_with_total = (a_del + a_can + a_shp) - (abs(a_ret) + abs(a_exc))
     u_total = (a_del + a_exc + a_can) - abs(a_ret)
@@ -346,40 +363,45 @@ if settle_amt_col:
         st.markdown(f"""
         **Shipped With Total:** `(Delivered + Cancelled + Shipped) - (Return + Exchange)`
         **Total Amount:** `(Delivered + Exchange + Cancelled) - Return Amount`
-        **Recovery:** Sum of 'Recovery' column (converted to Positive).
-        **Claims:** Sum of 'Claims' column.
+        **Recovery:** Sum of 'Recovery' column (Absolute Value).
         """)
 
-# ---------------- PROFIT ----------------
+# ---------------- TRUE PROFIT LOGIC ----------------
 st.markdown("---")
-st.subheader("💹 Profit Analysis")
-profit_val = pd.to_numeric(df_f[profit_amt_col], errors='coerce').sum() if profit_amt_col in df_f.columns else 0.0
-exc_loss_val = pd.to_numeric(df_f[exchange_loss_col], errors='coerce').sum() if exchange_loss_col in df_f.columns else 0.0
-net_profit = profit_val - (abs(a_ret) + abs(exc_loss_val))
+st.subheader("💹 True Profit Analysis (With Calculated Exchange Loss)")
 
-p1, p2, p3, p4 = st.columns(4)
-p1.markdown(_card_html("Profit Sum", profit_val, "#1b5e20", "💹"), unsafe_allow_html=True)
-p2.markdown(_card_html("Return Loss", abs(a_ret), "#b71c1c", "➖"), unsafe_allow_html=True)
-p3.markdown(_card_html("Exchange Loss", exc_loss_val, "#f57c00", "🔄"), unsafe_allow_html=True)
-p4.markdown(_card_html("Net Profit", net_profit, "#0d47a1", "🧮"), unsafe_allow_html=True)
+total_ret_loss_abs = abs(a_ret)
+avg_ret_cost = total_ret_loss_abs / c_ret if c_ret > 0 else 0.0
+est_exchange_loss = c_exc * avg_ret_cost
+total_cogs = c_del * user_product_cost
+final_net_profit = a_del - (total_ret_loss_abs + est_exchange_loss + total_cogs)
+
+profit_data = {
+    "Metric": ["Delivered Revenue (+)", "Return Loss (-)", "Est. Exchange Charge (-)", "Product Cost (COGS) (-)", "FINAL NET PROFIT (=)"],
+    "Count/Qty": [c_del, c_ret, c_exc, c_del, "—"],
+    "Amount (₹)": [a_del, -total_ret_loss_abs, -est_exchange_loss, -total_cogs, final_net_profit],
+    "Note": ["Settlement Amount", "Actual from Sheet", f"Calc: {c_exc} * {avg_ret_cost:.2f} (Avg Ret Cost)", f"Calc: {c_del} * {user_product_cost}", "Delivered - (Ret+Exc+COGS)"]
+}
+st.table(pd.DataFrame(profit_data))
+
+kp1, kp2, kp3 = st.columns(3)
+kp1.markdown(_card_html("Delivered Amount", a_del, "#1b5e20", "✅"), unsafe_allow_html=True)
+kp2.markdown(_card_html("Total Deductions", (total_ret_loss_abs + est_exchange_loss + total_cogs), "#b71c1c", "Expenses"), unsafe_allow_html=True)
+kp3.markdown(_card_html("FINAL TRUE PROFIT", final_net_profit, "#0d47a1", "💰"), unsafe_allow_html=True)
 
 # ---------------- RETURN % ----------------
 st.markdown("---")
 st.subheader("📊 Return & Exchange Percentage")
 
-if c_del > 0:
-    ret_pct = (c_ret / c_del) * 100
-    exc_pct = (c_exc / c_del) * 100
-else:
-    ret_pct = 0
-    exc_pct = 0
+ret_pct = (c_ret / c_del) * 100 if c_del > 0 else 0
+exc_pct = (c_exc / c_del) * 100 if c_del > 0 else 0
 
 rp1, rp2, rp3 = st.columns(3)
 rp1.markdown(f"<div style='background:#1565c0;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Delivered</div><div style='font-size:28px'>{c_del}</div><div>100%</div></div>", unsafe_allow_html=True)
 rp2.markdown(f"<div style='background:#c62828;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Return</div><div style='font-size:28px'>{c_ret}</div><div>{ret_pct:.2f}%</div></div>", unsafe_allow_html=True)
 rp3.markdown(f"<div style='background:#ef6c00;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Exchange</div><div style='font-size:28px'>{c_exc}</div><div>{exc_pct:.2f}%</div></div>", unsafe_allow_html=True)
 
-# ---------------- ADS ANALYSIS (UPDATED) ----------------
+# ---------------- ADS ANALYSIS ----------------
 st.markdown("---")
 st.subheader("📢 Ads Cost Analysis")
 ads_table = None
@@ -389,77 +411,60 @@ if ads_df is not None and not ads_df.empty:
         ads_df['Total Ads Cost'] = pd.to_numeric(ads_df['Total Ads Cost'], errors='coerce').fillna(0)
         ads_df['Deduction Duration'] = pd.to_datetime(ads_df['Deduction Duration'], errors='coerce').dt.date
         
-        # Ads Date Filter
         min_a, max_a = ads_df['Deduction Duration'].min(), ads_df['Deduction Duration'].max()
         ads_rng = st.date_input("Ads Date Range", [min_a, max_a])
         
         if len(ads_rng) == 2:
             ads_f = ads_df[(ads_df['Deduction Duration'] >= ads_rng[0]) & (ads_df['Deduction Duration'] <= ads_rng[1])].copy()
             
-            # --- ADS METRICS ---
+            if order_date_col:
+                daily_orders = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Daily Orders')
+                daily_orders.columns = ['Deduction Duration', 'Daily Orders']
+                ads_f = pd.merge(ads_f, daily_orders, on='Deduction Duration', how='left').fillna(0)
+                ads_f['Per Order Cost'] = ads_f.apply(lambda row: row['Total Ads Cost'] / row['Daily Orders'] if row['Daily Orders'] > 0 else 0, axis=1)
+
             ads_total = ads_f['Total Ads Cost'].sum()
-            
-            # 1. Calculate Total Orders for this period (using main filtered df or based on date match)
-            # Strategy: Sum orders from df_f (since it's already date filtered if user selected same dates)
-            # OR better: Count orders occurring on the dates present in ads_f to be precise
-            
-            # Aggregate orders by date from main dataframe
-            daily_orders = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Daily Orders')
-            daily_orders.columns = ['Deduction Duration', 'Daily Orders']
-            
-            # Merge to calculate per day
-            merged_ads = pd.merge(ads_f, daily_orders, on='Deduction Duration', how='left').fillna(0)
-            
-            total_orders_in_period = merged_ads['Daily Orders'].sum()
-            per_order_cost = ads_total / total_orders_in_period if total_orders_in_period > 0 else 0
-            
-            # Display 3 Boxes
+            total_orders_period = ads_f['Daily Orders'].sum() if 'Daily Orders' in ads_f.columns else 0
+            avg_per_order = ads_total / total_orders_period if total_orders_period > 0 else 0
+
             ac1, ac2, ac3 = st.columns(3)
             ac1.markdown(_card_html("Total Ads Spend", ads_total, "#4a148c", "📣"), unsafe_allow_html=True)
-            ac2.markdown(_card_html("Total Orders", total_orders_in_period, "#6A1B9A", "📦"), unsafe_allow_html=True)
-            ac3.markdown(_card_html("Per Order Cost", per_order_cost, "#8E24AA", "🏷️"), unsafe_allow_html=True)
+            ac2.markdown(_card_html("Total Orders (Matched)", total_orders_period, "#6A1B9A", "📦"), unsafe_allow_html=True)
+            ac3.markdown(_card_html("Avg Cost / Order", avg_per_order, "#8E24AA", "🏷️"), unsafe_allow_html=True)
 
-            fig_ads = px.bar(merged_ads, x='Deduction Duration', y='Total Ads Cost', title="Daily Ads Spend")
+            fig_ads = px.bar(ads_f, x='Deduction Duration', y='Total Ads Cost', title="Daily Ads Spend")
             st.plotly_chart(fig_ads, use_container_width=True)
-            
-            st.dataframe(merged_ads, use_container_width=True)
-            ads_table = merged_ads
-    else:
-        st.warning("Ads sheet missing required columns.")
+            st.dataframe(ads_f, use_container_width=True)
+            ads_table = ads_f
 else:
     st.info("No Ads Data found in file.")
 
-# ---------------- FULL DATA PREVIEW ----------------
+# ---------------- PREVIEW & EXPORTS ----------------
 st.markdown("---")
 st.subheader("🔎 Full Data Preview")
 if st.checkbox("Show All Filtered Data", value=True):
     st.dataframe(df_f, use_container_width=True)
 
-# ---------------- CHARTS ----------------
 st.markdown("---")
+st.subheader("📊 Analytics")
 c1, c2 = st.columns(2)
 with c1:
     status_counts_df = df_f[status_col].fillna("BLANK").value_counts().reset_index()
     status_counts_df.columns = ['Status', 'Count']
     fig1 = px.bar(status_counts_df, x='Status', y='Count', text='Count', title="Live Order Status")
     st.plotly_chart(fig1, use_container_width=True)
-
 with c2:
     if order_date_col:
         date_counts = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Orders')
         fig2 = px.bar(date_counts, x=order_date_col, y='Orders', text='Orders', title="Orders Timeline")
         st.plotly_chart(fig2, use_container_width=True)
 
-# ---------------- EXPORTS ----------------
-st.markdown("---")
-st.subheader("📥 Downloads")
-
 buffer = BytesIO()
 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
     df_f.to_excel(writer, sheet_name='Filtered Data', index=False)
-    pd.DataFrame({'Metric':['Net Amount', 'Shipped Total', 'Net Profit', 'Claims', 'Recovery'], 'Value':[u_total, shipped_with_total, net_profit, a_claims, a_rec]}).to_excel(writer, sheet_name='Summary')
+    pd.DataFrame(profit_data).to_excel(writer, sheet_name='Profit Logic', index=False)
     if ads_table is not None: ads_table.to_excel(writer, sheet_name='Ads Analysis', index=False)
 
-st.download_button("⬇️ Download Excel Report", data=buffer.getvalue(), file_name="Meesho_Report_v15.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button("⬇️ Download Excel Report", data=buffer.getvalue(), file_name="Meesho_Report_v19.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-st.success("✅ Dashboard Ready (v15): Recovery (Abs), Claims, Order Source, RTO 3-Col, Ads Per Order Cost.")
+st.success("✅ Dashboard v19: SKU Grouping Fixed with Multi-Group Auto Update.")
