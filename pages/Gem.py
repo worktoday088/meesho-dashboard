@@ -1,10 +1,8 @@
-# 📦 Meesho Order Analysis Dashboard — Final Mobile Optimized v13
-# Updates:
-# 1. Mobile-Friendly Tooltip: Added an Expander below cards to show formulas on click/tap.
-# 2. Restored: Return % & Exchange % Analysis.
-# 3. Restored: Ads Cost Analysis (Data + Bar Chart).
-# 4. Changed: All Line Charts converted to Bar Charts.
-# 5. Fixed: HTML formatting for cards.
+# 📦 Meesho Order Analysis Dashboard — Final Master v14
+# Restored: SKU Groups, Dispatch Date, Ads Per Order Cost, Return % Layout.
+# Added: Catalog ID, Full Data Preview, Mobile Tooltips (Full Text).
+# Charts: Bar Charts Only (for speed).
+# Date: 2026-01-29
 
 import os
 import re
@@ -22,7 +20,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-# Optional libs for PDF export
+# Optional libs
 try:
     from PyPDF2 import PdfMerger
     _pdf_merge_ok = True
@@ -35,12 +33,12 @@ try:
 except Exception:
     _kaleido_ok = False
 
-__VERSION__ = "Power By Rehan — Mobile Fixed v13"
+__VERSION__ = "Power By Rehan — Master v14"
 
 # ---------------- PAGE SETUP ----------------
 st.set_page_config(layout="wide", page_title=f"📦 Meesho Dashboard — {__VERSION__}")
 st.title(f"📦 Meesho Order Analysis Dashboard — {__VERSION__}")
-st.caption("Mobile Optimized: Click 'Calculation Formulas' to see logic | Return % & Ads Restored")
+st.caption("Features: SKU Groups | Dispatch Filter | Catalog ID | Ads Analysis | Full Data Export")
 
 if not _kaleido_ok:
     st.warning("⚠️ For PDF Charts: Please install kaleido -> `pip install kaleido`")
@@ -86,14 +84,10 @@ def html_escape(s):
     import html
     return html.escape(str(s)) if s is not None else ""
 
-# --- CARD HTML (Single Line for Stability) ---
+# --- CARD HTML ---
 def _card_html(title, value, bg="#0d47a1", icon="₹", tooltip=None):
-    # Desktop Tooltip (Hover)
     tt_attr = f'title="{html_escape(tooltip)}"' if tooltip else ""
-    # Icon for visual cue
     tt_icon = '<span style="margin-left:5px;cursor:help;font-size:11px;border:1px solid rgba(255,255,255,0.5);border-radius:50%;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;">?</span>' if tooltip else ""
-    
-    # Flattened HTML
     return f"<div {tt_attr} style='background:{bg};padding:14px;border-radius:12px;color:white;text-align:center'><div style='font-size:14px;opacity:0.95;display:flex;gap:6px;align-items:center;justify-content:center'><span style='font-weight:700'>{icon}</span><span style='font-weight:700'>{title}</span>{tt_icon}</div><div style='font-size:22px;font-weight:800;margin-top:6px'>{_format_display(value)}</div></div>"
 
 # ---------------- SIDEBAR ----------------
@@ -115,6 +109,7 @@ st.markdown(f"<div style='background-color:#FFEB3B;padding:10px;border-radius:10
 if st.sidebar.button("🔄 Reset Filters"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    st.session_state['sku_groups'] = []
     st.rerun()
 
 # ---------------- DATA LOAD ----------------
@@ -130,10 +125,12 @@ if ads_df is not None: ads_df.columns = [str(c).strip() for c in ads_df.columns]
 # Detect Columns
 status_col = _detect_col(orders_df, ("live","status"), ("status",))
 order_date_col = _detect_col(orders_df, ("order","date"))
+dispatch_date_col = _detect_col(orders_df, ("dispatch","date"))
 sku_col = _detect_col(orders_df, ("supplier","sku"), ("sku",))
 settle_amt_col = _detect_col(orders_df, ("final","settlement"), ("settlement","amount"))
 exchange_loss_col = _detect_col(orders_df, ("exchange","loss"))
 profit_amt_col = _detect_col(orders_df, ("profit",))
+# NEW: Catalog ID
 catalog_id_col = _detect_col(orders_df, ("catalog","id"), ("catalog_id",))
 
 if not status_col:
@@ -141,33 +138,87 @@ if not status_col:
     st.stop()
 
 # Date Parsing
-for c in [order_date_col]:
+for c in [order_date_col, dispatch_date_col]:
     if c and c in orders_df.columns:
         orders_df[c] = pd.to_datetime(orders_df[c], errors='coerce')
 
-# ---------------- FILTERS ----------------
-with st.sidebar.expander("🎛️ Filters", expanded=True):
-    # Status
+# ---------------- FILTERS (RESTORED ALL) ----------------
+with st.sidebar.expander("🎛️ Advanced Filters", expanded=True):
+    # 1. Status
     status_opts = ['All', 'Delivered', 'Return', 'RTO', 'Exchange', 'Cancelled', 'Shipped', ""]
     sel_statuses = st.multiselect("Status", status_opts, default=['All'])
     
-    # SKU
+    # 2. SKU Grouping (Restored Full Logic)
     if sku_col:
+        st.markdown("**SKU Search & Grouping**")
         skus = sorted([str(x) for x in orders_df[sku_col].dropna().unique().tolist()])
-        sel_skus = st.multiselect("Select SKUs", skus)
+        
+        sku_search_q = st.text_input("Search SKU keyword", key='sku_search_q')
+        new_group_name = st.text_input("Group name (Optional)", key='sku_new_group_name')
+
+        c_grp1, c_grp2 = st.columns(2)
+        with c_grp1:
+            if st.button("➕ Add Group"):
+                pattern = (sku_search_q or new_group_name).strip()
+                if pattern:
+                    matched = [s for s in skus if pattern.lower() in s.lower()]
+                    if matched:
+                        st.session_state['sku_groups'].append({'name': new_group_name or pattern, 'skus': matched})
+                        st.rerun()
+        with c_grp2:
+            if st.button("🧹 Clear All"):
+                st.session_state['sku_groups'] = []
+                st.rerun()
+        
+        # Group Selection
+        active_skus = []
+        if st.session_state['sku_groups']:
+            grp_labels = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
+            sel_grps = st.multiselect("Select Groups", grp_labels)
+            for label in sel_grps:
+                g_name = label.rsplit(" (", 1)[0]
+                for g in st.session_state['sku_groups']:
+                    if g['name'] == g_name:
+                        active_skus.extend(g['skus'])
+        
+        # Manual Selection
+        manual_matches = [s for s in skus if sku_search_q.lower() in s.lower()] if sku_search_q else []
+        final_pool = sorted(list(set(active_skus + manual_matches)))
+        sel_skus = st.multiselect("Selected SKUs", skus, default=final_pool)
     else:
         sel_skus = None
     
-    # Catalog ID
+    # 3. Catalog ID (New)
     if catalog_id_col:
-        cats = sorted([str(x) for x in orders_df[catalog_id_col].dropna().unique().tolist()])
         st.markdown("---")
+        cats = sorted([str(x) for x in orders_df[catalog_id_col].dropna().unique().tolist()])
         sel_cats = st.multiselect("📂 Catalog ID", cats)
     else:
         sel_cats = None
 
+with st.sidebar.expander("📅 Date Filters (Restored)", expanded=True):
+    # Order Date
+    date_range = None
+    if order_date_col:
+        dmin, dmax = orders_df[order_date_col].min(), orders_df[order_date_col].max()
+        if pd.notna(dmin):
+            date_range = st.date_input("Order Date Range", [dmin, dmax])
+    
+    # Dispatch Date (Restored)
+    dispatch_range = None
+    if dispatch_date_col:
+        ddmin, ddmax = orders_df[dispatch_date_col].min(), orders_df[dispatch_date_col].max()
+        if pd.notna(ddmin):
+            dispatch_range = st.date_input("Dispatch Date Range", [ddmin, ddmax])
+
 # ---------------- APPLY FILTERS ----------------
 df_f = orders_df.copy()
+
+if order_date_col and date_range and len(date_range)==2:
+    df_f = df_f[(df_f[order_date_col] >= pd.Timestamp(date_range[0])) & (df_f[order_date_col] <= pd.Timestamp(date_range[1]))]
+
+if dispatch_date_col and dispatch_range and len(dispatch_range)==2:
+    df_f = df_f[(df_f[dispatch_date_col] >= pd.Timestamp(dispatch_range[0])) & (df_f[dispatch_date_col] <= pd.Timestamp(dispatch_range[1]))]
 
 if sku_col and sel_skus:
     df_f = df_f[df_f[sku_col].astype(str).isin(sel_skus)]
@@ -186,8 +237,7 @@ if 'All' not in sel_statuses:
         mask = df_f[status_col].isna()
     df_f = df_f[mask]
 
-# ---------------- CALCULATIONS ----------------
-# RTO Fix
+# ---------------- RTO & CALCS ----------------
 def _ensure_rto(df):
     if 'RTO Amount' not in df.columns and 'Listing Price (Incl. taxes)' in df.columns:
         mask = df[status_col].astype(str).str.upper() == 'RTO'
@@ -196,7 +246,6 @@ def _ensure_rto(df):
 
 df_f = _ensure_rto(df_f)
 
-# Counts
 counts = df_f[status_col].astype(str).str.upper().value_counts()
 c_del = counts.get('DELIVERED', 0)
 c_ret = counts.get('RETURN', 0)
@@ -207,7 +256,7 @@ c_rto = counts.get('RTO', 0)
 c_blank = df_f[status_col].isna().sum()
 total_rows = len(df_f)
 
-# Status Cards
+# Card Row 1
 status_labels = [('✅ Delivered', c_del, '#2e7d32'), ('↩️ Return', c_ret, '#c62828'), 
                  ('🔄 Exchange', c_exc, '#f57c00'), ('❌ Cancelled', c_can, '#616161'),
                  ('🚚 Shipped', c_shp, '#1565c0'), ('📪 RTO', c_rto, '#8e24aa'),
@@ -217,7 +266,7 @@ cols = st.columns(8)
 for i, (l, v, c) in enumerate(status_labels):
     cols[i].markdown(f"<div style='background:{c};padding:8px;border-radius:8px;text-align:center;color:white;font-size:12px;'><b>{l}</b><br><span style='font-size:18px'>{v}</span></div>", unsafe_allow_html=True)
 
-# ---------------- FINANCIAL SUMMARY ----------------
+# ---------------- FINANCIALS ----------------
 st.subheader("₹ Financial Summary")
 if settle_amt_col:
     df_f[settle_amt_col] = pd.to_numeric(df_f[settle_amt_col], errors='coerce').fillna(0)
@@ -232,7 +281,6 @@ if settle_amt_col:
     a_rec = df_f[df_f[status_col].isna()][settle_amt_col].sum()
     a_rto = df_f[df_f[status_col].astype(str).str.upper() == 'RTO']['RTO Amount'].sum() if 'RTO Amount' in df_f.columns else 0
 
-    # Formulas
     shipped_with_total = (a_del + a_can + a_shp) - (abs(a_ret) + abs(a_exc))
     u_total = (a_del + a_exc + a_can) - abs(a_ret)
 
@@ -252,16 +300,15 @@ if settle_amt_col:
     r2[2].markdown(_card_html("Shipped Total", shipped_with_total, "#0b3d91", "🚚", tt_ship), unsafe_allow_html=True)
     r2[3].markdown(_card_html("Total Amount", u_total, "#0d47a1", "🧾", tt_tot), unsafe_allow_html=True)
 
-    # --- MOBILE TOOLTIP SOLUTION ---
-    # Since hover doesn't work on mobile, we add a clear clickable expander
+    # --- MOBILE TOOLTIP (FULL TEXT RESTORED) ---
     with st.expander("ℹ️ Click here to see Calculation Formulas (Mobile Friendly)"):
         st.markdown(f"""
-        **Shipped With Total Formula:** `({a_del:,.0f} [Del] + {a_can:,.0f} [Can] + {a_shp:,.0f} [Ship]) - ({abs(a_ret):,.0f} [Ret] + {abs(a_exc):,.0f} [Exc])`
+        **Shipped With Total:** `(Delivered + Cancelled + Shipped) - (Return + Exchange)`
         
-        **Total Amount Formula:** `({a_del:,.0f} [Del] + {a_exc:,.0f} [Exc] + {a_can:,.0f} [Can]) - {abs(a_ret):,.0f} [Ret]`
+        **Total Amount:** `(Delivered + Exchange + Cancelled) - Return Amount`
         """)
 
-# ---------------- PROFIT CALCULATION ----------------
+# ---------------- PROFIT ----------------
 st.markdown("---")
 st.subheader("💹 Profit Analysis")
 profit_val = pd.to_numeric(df_f[profit_amt_col], errors='coerce').sum() if profit_amt_col in df_f.columns else 0.0
@@ -274,9 +321,9 @@ p2.markdown(_card_html("Return Loss", abs(a_ret), "#b71c1c", "➖"), unsafe_allo
 p3.markdown(_card_html("Exchange Loss", exc_loss_val, "#f57c00", "🔄"), unsafe_allow_html=True)
 p4.markdown(_card_html("Net Profit", net_profit, "#0d47a1", "🧮"), unsafe_allow_html=True)
 
-# ---------------- RESTORED: RETURN % ANALYSIS ----------------
+# ---------------- RETURN % (OLD STYLE RESTORED) ----------------
 st.markdown("---")
-st.subheader("📊 Return & Exchange Percentage (Restored)")
+st.subheader("📊 Return & Exchange Percentage")
 
 if c_del > 0:
     ret_pct = (c_ret / c_del) * 100
@@ -286,19 +333,13 @@ else:
     exc_pct = 0
 
 rp1, rp2, rp3 = st.columns(3)
-rp1.markdown(_card_html("Delivered Count", c_del, "#1b5e20"), unsafe_allow_html=True)
-rp2.markdown(_card_html("Return %", ret_pct, "#b71c1c", "%"), unsafe_allow_html=True)
-rp3.markdown(_card_html("Exchange %", exc_pct, "#e65100", "%"), unsafe_allow_html=True)
+rp1.markdown(f"<div style='background:#1565c0;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Delivered</div><div style='font-size:28px'>{c_del}</div><div>100%</div></div>", unsafe_allow_html=True)
+rp2.markdown(f"<div style='background:#c62828;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Return</div><div style='font-size:28px'>{c_ret}</div><div>{ret_pct:.2f}%</div></div>", unsafe_allow_html=True)
+rp3.markdown(f"<div style='background:#ef6c00;padding:16px;border-radius:12px;color:white'><div style='font-size:18px'>Exchange</div><div style='font-size:28px'>{c_exc}</div><div>{exc_pct:.2f}%</div></div>", unsafe_allow_html=True)
 
-# Bar Chart for Return %
-ret_df = pd.DataFrame({'Type': ['Return %', 'Exchange %'], 'Value': [ret_pct, exc_pct]})
-fig_ret = px.bar(ret_df, x='Type', y='Value', text='Value', color='Type', color_discrete_map={'Return %':'#b71c1c', 'Exchange %':'#e65100'})
-fig_ret.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-st.plotly_chart(fig_ret, use_container_width=True)
-
-# ---------------- RESTORED: ADS COST ANALYSIS ----------------
+# ---------------- ADS (PER ORDER COST RESTORED) ----------------
 st.markdown("---")
-st.subheader("📢 Ads Cost Analysis (Restored)")
+st.subheader("📢 Ads Analysis (With Per Order Cost)")
 ads_table = None
 
 if ads_df is not None and not ads_df.empty:
@@ -311,80 +352,82 @@ if ads_df is not None and not ads_df.empty:
         ads_rng = st.date_input("Ads Date Range", [min_a, max_a])
         
         if len(ads_rng) == 2:
-            ads_f = ads_df[(ads_df['Deduction Duration'] >= ads_rng[0]) & (ads_df['Deduction Duration'] <= ads_rng[1])]
+            ads_f = ads_df[(ads_df['Deduction Duration'] >= ads_rng[0]) & (ads_df['Deduction Duration'] <= ads_rng[1])].copy()
             
+            # --- NEW: ADS PER ORDER CALCULATION ---
+            if order_date_col:
+                # Calculate daily orders count from the main orders df
+                daily_orders = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Daily Orders')
+                daily_orders.columns = ['Deduction Duration', 'Daily Orders']
+                
+                # Merge with Ads Data
+                ads_f = pd.merge(ads_f, daily_orders, on='Deduction Duration', how='left').fillna(0)
+                
+                # Calculate Per Order Cost
+                ads_f['Per Order Cost'] = ads_f.apply(lambda row: row['Total Ads Cost'] / row['Daily Orders'] if row['Daily Orders'] > 0 else 0, axis=1)
+
             ads_total = ads_f['Total Ads Cost'].sum()
             st.markdown(_card_html("Total Ads Spend", ads_total, "#4a148c", "📣"), unsafe_allow_html=True)
             
-            # Ads Bar Chart (Requested Bar Only)
             fig_ads = px.bar(ads_f, x='Deduction Duration', y='Total Ads Cost', title="Daily Ads Spend")
             st.plotly_chart(fig_ads, use_container_width=True)
             
             ads_table = ads_f
-            if st.checkbox("Show Ads Data Table"):
-                st.dataframe(ads_f, use_container_width=True)
+            st.dataframe(ads_f, use_container_width=True)
     else:
-        st.warning("Ads sheet found but missing 'Deduction Duration' or 'Total Ads Cost' columns.")
-else:
-    st.info("No Ads Data found in file.")
+        st.warning("Ads sheet missing required columns.")
+
+# ---------------- DATA PREVIEW (FULL DATA) ----------------
+st.markdown("---")
+st.subheader("🔎 Full Data Preview")
+# No limits on head()
+if st.checkbox("Show All Filtered Data"):
+    st.dataframe(df_f, use_container_width=True)
 
 # ---------------- CHARTS (BAR ONLY) ----------------
 st.markdown("---")
-st.subheader("📊 Order Analytics")
 _figs_for_pdf = []
 
 c1, c2 = st.columns(2)
-
 with c1:
-    st.caption("Live Order Status Count")
     status_counts_df = df_f[status_col].fillna("BLANK").value_counts().reset_index()
     status_counts_df.columns = ['Status', 'Count']
-    if not status_counts_df.empty:
-        fig1 = px.bar(status_counts_df, x='Status', y='Count', color='Status', text='Count')
-        fig1.update_traces(textposition='outside')
-        st.plotly_chart(fig1, use_container_width=True)
-        _figs_for_pdf.append(("Status Count", fig1))
+    fig1 = px.bar(status_counts_df, x='Status', y='Count', text='Count', title="Live Order Status")
+    st.plotly_chart(fig1, use_container_width=True)
+    _figs_for_pdf.append(("Status", fig1))
 
 with c2:
-    st.caption("Orders by Date (Bar Chart)")
     if order_date_col:
         date_counts = df_f.groupby(df_f[order_date_col].dt.date).size().reset_index(name='Orders')
-        # Changed to Bar Chart as requested
-        fig2 = px.bar(date_counts, x=order_date_col, y='Orders', text='Orders')
+        fig2 = px.bar(date_counts, x=order_date_col, y='Orders', text='Orders', title="Orders Timeline")
         st.plotly_chart(fig2, use_container_width=True)
-        _figs_for_pdf.append(("Orders by Date", fig2))
+        _figs_for_pdf.append(("Timeline", fig2))
 
 # ---------------- EXPORTS ----------------
 st.markdown("---")
 st.subheader("📥 Downloads")
 
-# Excel
 buffer = BytesIO()
 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
     df_f.to_excel(writer, sheet_name='Filtered Data', index=False)
     pd.DataFrame({'Metric':['Net Amount', 'Shipped Total', 'Net Profit'], 'Value':[u_total, shipped_with_total, net_profit]}).to_excel(writer, sheet_name='Summary')
-    if ads_table is not None: ads_table.to_excel(writer, sheet_name='Ads Data', index=False)
+    if ads_table is not None: ads_table.to_excel(writer, sheet_name='Ads Analysis', index=False)
 
-st.download_button("⬇️ Download Excel Report", data=buffer.getvalue(), file_name="Meesho_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.download_button("⬇️ Download Excel", data=buffer.getvalue(), file_name="Meesho_Report_v14.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# PDF
 if _kaleido_ok:
     def _create_pdf():
         import tempfile
         t = tempfile.mkdtemp()
         fname = os.path.join(t, "report.pdf")
         with PdfPages(fname) as pdf:
-            # Page 1: Summary
             fig = plt.figure(figsize=(10,6))
             plt.axis('off')
             plt.text(0.5, 0.9, f"Report: {_supplier_label}", ha='center', fontsize=16)
             plt.text(0.5, 0.7, f"Total Amount: {u_total}", ha='center', fontsize=14)
-            plt.text(0.5, 0.6, f"Net Profit: {net_profit}", ha='center', fontsize=14)
             plt.text(0.5, 0.5, f"Return %: {ret_pct:.2f}%", ha='center', fontsize=14)
             pdf.savefig(fig)
             plt.close()
-            
-            # Page 2+: Charts
             for title, f in _figs_for_pdf:
                 try:
                     img_bytes = f.to_image(format="png", width=1200, height=800, scale=2)
@@ -398,7 +441,6 @@ if _kaleido_ok:
                 except: pass
         with open(fname, "rb") as f:
             return f.read()
+    st.download_button("⬇️ Download PDF", data=_create_pdf(), file_name="Report_v14.pdf", mime="application/pdf")
 
-    st.download_button("⬇️ Download PDF (Charts)", data=_create_pdf(), file_name="Report_v13.pdf", mime="application/pdf")
-
-st.success("✅ Dashboard Updated: Mobile Tooltips (Expander), Return %, Ads, & Bar Charts Only.")
+st.success("✅ Dashboard Restored & Updated: Old Return Style, All Filters, Ads Per Order, Full Data Preview.")
