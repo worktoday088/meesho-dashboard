@@ -446,8 +446,8 @@ col_contact1, col_contact2 = st.columns(2)
 with col_contact1:
     st.subheader("💬 Chat on WhatsApp")
     st.write("Need quick help? Chat with Admin directly.")
-    # REPLACE 91XXXXXXXXXX with your actual 10-digit number
-    whatsapp_number = "91XXXXXXXXXX" 
+    # REPLACE 918010952817 with your actual 10-digit number
+    whatsapp_number = "918010952817" 
     whatsapp_url = f"https://wa.me/{whatsapp_number}"
     st.markdown(f'''
         <a href="{whatsapp_url}" target="_blank">
