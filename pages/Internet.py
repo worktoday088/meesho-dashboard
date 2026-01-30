@@ -4,16 +4,12 @@ from io import BytesIO
 from fpdf import FPDF
 import tempfile
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
-    st.warning("Please Login")
-    st.stop()
-
 # Streamlit Config
 st.set_page_config(
     page_title="Courier Partner Delivery & Return Analysis",
     layout="wide"
 )
-st.title("📦 Courier Partner Delivery & Return Analysis (Final Stable)")
+st.title("📦 Courier Partner Delivery & Return Analysis (Smart Grouping)")
 
 
 def add_grand_totals(df: pd.DataFrame) -> pd.DataFrame:
@@ -227,8 +223,8 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # 4. SKU Grouping & Filter (RE-ENGINEERED FOR CLOUD STABILITY)
-    final_sku_list = [] # This will hold the final list to filter by
+    # 4. SKU Grouping & Filter (SMART LOGIC)
+    final_sku_list = [] 
     
     if "SKU" in df_all.columns:
         df_all["SKU"] = df_all["SKU"].astype(str)
@@ -241,16 +237,14 @@ if uploaded_files:
         if 'sku_groups' not in st.session_state:
             st.session_state['sku_groups'] = []
         
-        # --- CALLBACK: Add Group (Only this needs a callback) ---
+        # --- CALLBACK: Add Group ---
         def add_group_callback():
-            """Creates a group and clears input to force refresh."""
             name = st.session_state.new_group_name
             search = st.session_state.new_group_search
             
             if name and search:
                 matches = [s for s in all_skus if search.lower() in s.lower()]
                 if matches:
-                    # Update or Append
                     found = False
                     for g in st.session_state["sku_groups"]:
                         if g["name"] == name:
@@ -269,44 +263,56 @@ if uploaded_files:
             st.session_state["sku_groups"] = []
 
         # --- Group Creation UI ---
-        with st.sidebar.form("group_creator_form", clear_on_submit=True):
-            st.text_input("1. Search SKU keyword", key='new_group_search')
-            st.text_input("2. Group Name", key='new_group_name')
-            c1, c2 = st.columns(2)
-            submitted = c1.form_submit_button("➕ Save Group", on_click=add_group_callback)
-            cleared = c2.form_submit_button("🧹 Clear All", on_click=clear_groups_callback)
+        with st.sidebar.expander("➕ Create New Group", expanded=False):
+            with st.form("group_creator_form", clear_on_submit=True):
+                st.text_input("1. Search SKU keyword", key='new_group_search')
+                st.text_input("2. Group Name", key='new_group_name')
+                c1, c2 = st.columns(2)
+                submitted = c1.form_submit_button("Save Group", on_click=add_group_callback)
+                cleared = c2.form_submit_button("Clear All", on_click=clear_groups_callback)
 
-        # --- SELECTION LOGIC (DIRECT - NO CALLBACKS) ---
-        # This part runs top-to-bottom every time. No syncing lag.
-        
-        # 1. Get Selected Groups
+        # -------------------------------------------------------------
+        # STEP 1: Select Group (This creates the BASE selection)
+        # -------------------------------------------------------------
         group_options = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
-        selected_group_names = st.sidebar.multiselect("Select Saved Groups", group_options)
+        selected_group_names = st.sidebar.multiselect("1. Select Saved Groups", group_options)
         
         skus_from_groups = []
         for label in selected_group_names:
-            # Extract name part (before the parenthesis)
-            # Logic: "Name (Count)" -> split by " (" -> take first part
             actual_name = label.rsplit(" (", 1)[0]
-            
-            # Find the group data
             for g in st.session_state['sku_groups']:
                 if g['name'] == actual_name:
                     skus_from_groups.extend(g['skus'])
                     break
         
-        # 2. Get Manual Selections
-        st.sidebar.markdown("---")
-        manual_skus = st.sidebar.multiselect("Add Manual SKUs", all_skus)
+        # Remove duplicates from group selection
+        skus_from_groups = list(set(skus_from_groups))
+
+        # Show visual confirmation
+        if skus_from_groups:
+            st.sidebar.success(f"✅ {len(skus_from_groups)} SKUs included from Groups.")
+
+        # -------------------------------------------------------------
+        # STEP 2: Add Extra SKUs (Options EXCLUDE group SKUs)
+        # -------------------------------------------------------------
+        # Filter options: Only show SKUs that are NOT already in the selected groups
+        # This solves your problem: Group wale SKUs yahan list mein nahi dikhenge!
         
-        # 3. Combine Both (Union)
-        # This creates the final list dynamically every time
-        combined_set = set(skus_from_groups) | set(manual_skus)
-        final_sku_list = list(combined_set)
+        available_extra_options = sorted(list(set(all_skus) - set(skus_from_groups)))
         
-        # Display count to confirm it's working
+        manual_skus = st.sidebar.multiselect(
+            "2. Add Extra SKUs (Optional)", 
+            options=available_extra_options,
+            help="SKUs in Groups are hidden here to avoid duplicates."
+        )
+        
+        # -------------------------------------------------------------
+        # STEP 3: Final Union
+        # -------------------------------------------------------------
+        final_sku_list = list(set(skus_from_groups) | set(manual_skus))
+        
         if final_sku_list:
-            st.sidebar.info(f"✨ Filtering by {len(final_sku_list)} SKUs")
+            st.sidebar.info(f"✨ Total Filtering SKUs: {len(final_sku_list)}")
         else:
             st.sidebar.text("No SKUs selected (Showing All)")
 
