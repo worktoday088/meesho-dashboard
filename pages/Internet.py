@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="Courier Partner Delivery & Return Analysis",
     layout="wide"
 )
-st.title("📦 Courier Partner Delivery & Return Analysis (Preview & Edit Mode)")
+st.title("📦 Courier Partner Delivery & Return Analysis (with Select All Feature)")
 
 
 def add_grand_totals(df: pd.DataFrame) -> pd.DataFrame:
@@ -224,7 +224,7 @@ if uploaded_files:
         selected_types = []
 
     # -----------------------------------------------------------------
-    # 4. SKU Grouping - PREVIEW & EDIT MODE (MAJOR UPDATE)
+    # 4. SKU Grouping - WITH SELECT ALL FEATURE
     # -----------------------------------------------------------------
     final_sku_list = [] 
     
@@ -239,9 +239,10 @@ if uploaded_files:
         if 'sku_groups' not in st.session_state:
             st.session_state['sku_groups'] = []
         
-        # --- NEW: Creator Interface with Preview ---
-        with st.sidebar.expander("➕ Create New Group (Preview & Edit)", expanded=False):
+        # --- NEW: Creator Interface with SELECT ALL ---
+        with st.sidebar.expander("➕ Create New Group (Smart Select)", expanded=False):
             st.caption("Step 1: Search Keyword")
+            
             # Using text_input to filter locally first
             search_keyword = st.text_input("Enter Keyword (e.g. Ramesh)")
             
@@ -250,14 +251,34 @@ if uploaded_files:
             if search_keyword:
                 found_matches = [s for s in all_skus if search_keyword.lower() in s.lower()]
             
-            st.caption(f"Step 2: Review & Uncheck unwanted ({len(found_matches)} found)")
+            st.caption(f"Step 2: Review Selection ({len(found_matches)} found)")
             
-            # This is the magic box - allows user to UNCHECK wrong items before saving
+            # --- SELECT ALL BUTTONS LOGIC ---
+            col_sel1, col_sel2 = st.columns(2)
+            
+            # Callbacks to handle "Select All" / "Deselect All"
+            def select_all_matches():
+                st.session_state.preview_multiselect = found_matches
+            
+            def deselect_all_matches():
+                st.session_state.preview_multiselect = []
+            
+            # Check if key exists to prevent error on first run
+            if "preview_multiselect" not in st.session_state:
+                st.session_state.preview_multiselect = []
+
+            # Display Buttons
+            with col_sel1:
+                st.button("✅ Select All", on_click=select_all_matches, use_container_width=True)
+            with col_sel2:
+                st.button("❌ Deselect All", on_click=deselect_all_matches, use_container_width=True)
+
+            # The Main Multiselect Box
             selected_for_group = st.multiselect(
                 "Verify SKUs to add:",
                 options=found_matches,
-                default=found_matches, # Pre-select all matches
-                key="preview_multiselect"
+                key="preview_multiselect" 
+                # Note: We removed 'default' here because 'key' + state controls it now
             )
             
             st.caption("Step 3: Name & Save")
@@ -281,6 +302,7 @@ if uploaded_files:
             st.button("💾 Save Verified Group", on_click=save_filtered_group)
             
             # Delete button logic
+            st.markdown("---")
             if st.button("🧹 Clear All Groups"):
                 st.session_state["sku_groups"] = []
                 st.rerun()
@@ -303,7 +325,7 @@ if uploaded_files:
                     break
         skus_from_groups = list(set(skus_from_groups))
 
-        # --- NEW: View What's Inside the Selected Group ---
+        # --- View What's Inside the Selected Group ---
         if skus_from_groups:
             with st.sidebar.expander(f"👁️ View SKUs in Selection ({len(skus_from_groups)})"):
                 st.dataframe(pd.DataFrame(skus_from_groups, columns=["Included SKUs"]), hide_index=True)
