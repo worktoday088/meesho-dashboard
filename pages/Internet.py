@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="Courier Partner Delivery & Return Analysis",
     layout="wide"
 )
-st.title("📦 Courier Partner Delivery & Return Analysis (Updated)")
+st.title("📦 Courier Partner Delivery & Return Analysis (Cloud Fix)")
 
 
 def add_grand_totals(df: pd.DataFrame) -> pd.DataFrame:
@@ -230,7 +230,7 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # 4. SKU Grouping & Filter (NEW FEATURE ADDED)
+    # 4. SKU Grouping & Filter (CLOUD OPTIMIZED)
     if "SKU" in df_all.columns:
         df_all["SKU"] = df_all["SKU"].astype(str)
         all_skus = sorted(df_all["SKU"].dropna().unique())
@@ -238,46 +238,46 @@ if uploaded_files:
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📦 SKU Grouping & Selection")
 
-        # Session State Init
+        # --- Session State Init ---
         if 'sku_groups' not in st.session_state:
             st.session_state['sku_groups'] = []
         if 'selected_skus_final' not in st.session_state:
             st.session_state['selected_skus_final'] = []
-
-        # --- Group Creation Section ---
-        search_kw = st.sidebar.text_input("1. Search SKU keyword (to make group)")
-        matches = [s for s in all_skus if search_kw.lower() in s.lower()] if search_kw else []
-
-        group_name = st.sidebar.text_input("2. Group Name (e.g. Kurti Set A)", value=search_kw)
-
-        c1, c2 = st.sidebar.columns(2)
-        with c1:
-            if st.button("➕ Add Group"):
-                if group_name and matches:
-                    # Check if exists and update, else append
+        
+        # --- CALLBACK FUNCTIONS (Critical for Cloud) ---
+        def add_group_callback():
+            """Handle adding group before reload."""
+            name = st.session_state.get('new_group_name', '')
+            search = st.session_state.get('new_group_search', '')
+            
+            if name and search:
+                # Find matches in global list
+                matches = [s for s in all_skus if search.lower() in s.lower()]
+                if matches:
+                    # Update or Append
                     found = False
                     for g in st.session_state["sku_groups"]:
-                        if g["name"] == group_name:
+                        if g["name"] == name:
                             g["skus"] = matches
                             found = True
+                            break
                     if not found:
-                        st.session_state["sku_groups"].append({"name": group_name, "skus": matches})
-                    st.success(f"Group '{group_name}' Saved!")
-                    st.rerun()
-                elif not group_name:
-                    st.sidebar.error("Name needed")
-                elif not matches:
-                    st.sidebar.error("No SKUs found")
+                        st.session_state["sku_groups"].append({"name": name, "skus": matches})
+                    
+                    st.toast(f"✅ Group '{name}' created with {len(matches)} SKUs!")
+                else:
+                    st.toast("⚠️ No SKUs matched that keyword.")
+            else:
+                st.toast("⚠️ Please enter both Name and Keyword.")
 
-        with c2:
-            if st.button("🧹 Clear All"):
-                st.session_state["sku_groups"] = []
-                st.session_state['selected_skus_final'] = []
-                st.rerun()
+        def clear_groups_callback():
+            st.session_state["sku_groups"] = []
+            st.session_state['selected_skus_final'] = []
+            st.toast("🗑️ All Groups Cleared")
 
-        # --- Group Selection Logic ---
         def update_sku_selection():
-            chosen_labels = st.session_state.get('group_selector', [])
+            """Syncs dropdowns with actual data."""
+            chosen_labels = st.session_state.get('group_selector_box', [])
             include_live = st.session_state.get('live_match_checkbox', True)
             
             group_skus_list = []
@@ -285,7 +285,9 @@ if uploaded_files:
             for label in chosen_labels:
                 try:
                     # Format is "1. Name (Count)"
-                    idx = int(label.split('.')[0]) - 1
+                    # We extract index carefully
+                    parts = label.split('.')
+                    idx = int(parts[0]) - 1
                     if 0 <= idx < len(st.session_state['sku_groups']):
                         group_skus_list.extend(st.session_state['sku_groups'][idx]['skus'])
                 except:
@@ -295,30 +297,52 @@ if uploaded_files:
             current_search = st.session_state.get('search_kw_internal', '')
             manual = [s for s in all_skus if current_search.lower() in s.lower()] if (current_search and include_live) else []
 
+            # Combine and deduplicate
             final_set = sorted(list(set(group_skus_list + manual)))
             st.session_state['selected_skus_final'] = final_set
 
-        # Display Group Selector
+        # --- Group Creation Section ---
+        st.sidebar.text_input("1. Search SKU keyword", key='new_group_search')
+        st.sidebar.text_input("2. Group Name (e.g. Kurti Set A)", key='new_group_name')
+
+        c1, c2 = st.sidebar.columns(2)
+        with c1:
+            # Using on_click ensures this runs BEFORE the page reloads fully
+            st.button("➕ Add Group", on_click=add_group_callback)
+        with c2:
+            st.button("🧹 Clear All", on_click=clear_groups_callback)
+
+        # --- Group Selection Logic ---
+        # Generate labels dynamically
         if st.session_state["sku_groups"]:
             labels = [f"{i+1}. {g['name']} ({len(g['skus'])})" for i, g in enumerate(st.session_state["sku_groups"])]
+            
             st.sidebar.multiselect(
                 "Select Saved Groups",
                 options=labels,
-                key='group_selector',
+                key='group_selector_box',
                 on_change=update_sku_selection
             )
 
         st.sidebar.markdown("---")
+        
         # Live Search + Manual Selection
         st.sidebar.checkbox("Include live keyword matches", value=True, key='live_match_checkbox', on_change=update_sku_selection)
         st.sidebar.text_input("Live Search (Add to selection)", value="", key='search_kw_internal', on_change=update_sku_selection)
 
+        # Final Master Selector
+        # Note: We do NOT use on_change here to avoid circular logic loop in Cloud
         selected_skus = st.sidebar.multiselect(
             "Final Selected SKUs",
             options=all_skus,
             default=st.session_state.get('selected_skus_final', []),
             key="final_sku_multiselect"
         )
+        
+        # Force sync if the user manually changes the "Final Selected SKUs" box
+        if selected_skus != st.session_state.get('selected_skus_final', []):
+             st.session_state['selected_skus_final'] = selected_skus
+
     else:
         selected_skus = []
 
