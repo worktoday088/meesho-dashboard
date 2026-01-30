@@ -6,7 +6,7 @@ import tempfile
 
 # ================== Streamlit Config ==================
 st.set_page_config(page_title="Courier Partner Delivery & Return Analysis", layout="wide")
-st.title("📦 Courier Partner Delivery & Return Analysis — Final Merged (With SKU Groups)")
+st.title("📦 Courier Partner Delivery & Return Analysis — Final Merged (Global SKU Filter)")
 
 # ---------------- Helper functions ----------------
 
@@ -394,30 +394,35 @@ if uploaded_files:
         else:
             st.sidebar.text("Showing All Data")
 
-    # ----------------- Independent DataFrames -----------------
+    # ----------------- GLOBAL DATAFRAME FILTERING (FIXED) -----------------
+    
+    # 1. Start with full data
+    df_filtered_global = df_all.copy()
 
-    # Base DF → used for KPI boxes (NO SKU filter)
-    df_base = df_all.copy()
+    # 2. Apply Date Filter
+    if "Delivered Date" in df_filtered_global.columns and selected_dates:
+        df_filtered_global = df_filtered_global[df_filtered_global["Delivered Date"].astype(str).isin(selected_dates)]
 
-    if "Delivered Date" in df_base.columns and selected_dates:
-        df_base = df_base[df_base["Delivered Date"].astype(str).isin(selected_dates)]
+    # 3. Apply Courier Filter
+    if "Courier Partner" in df_filtered_global.columns and selected_couriers:
+        df_filtered_global = df_filtered_global[df_filtered_global["Courier Partner"].isin(selected_couriers)]
 
-    if "Courier Partner" in df_base.columns and selected_couriers:
-        df_base = df_base[df_base["Courier Partner"].isin(selected_couriers)]
-
-    # Table DF → used for main summary tables (APPLY SKU FILTER HERE)
-    df_table = df_base.copy()
-    if "SKU" in df_table.columns and final_sku_list:
-        df_table = df_table[df_table["SKU"].isin(final_sku_list)]
-
-    # Style DF → independent copy of base for style-group logic
-    df_style = df_base.copy()
+    # 4. Apply SKU Filter (THIS IS THE CRITICAL FIX)
+    # If any SKUs are selected (via Group or Manual), apply them to the GLOBAL data.
+    if "SKU" in df_filtered_global.columns and final_sku_list:
+        df_filtered_global = df_filtered_global[df_filtered_global["SKU"].astype(str).isin(final_sku_list)]
+    
+    # ----------------- ASSIGNMENT -----------------
+    # Now all downstream usage (KPIs, Tables, Style) uses this filtered dataframe
+    df_base = df_filtered_global.copy()
+    df_table = df_filtered_global.copy()
+    df_style = df_filtered_global.copy()
 
     # ----------------- Data Preview -----------------
     with st.expander("👁️ Data Preview — Raw (first 200 rows)", expanded=False):
         st.dataframe(df_all.head(200), use_container_width=True)
 
-    with st.expander("👁️ Preview — Table DF (after Filters)", expanded=False):
+    with st.expander("👁️ Preview — Table DF (after All Filters)", expanded=False):
         st.dataframe(df_table.head(200), use_container_width=True)
 
     # ----------------- KPI Boxes (Counts as integers) -----------------
@@ -526,10 +531,6 @@ if uploaded_files:
              # Logic: Exclude rows where Return Type contains "Courier" or "RTO"
              is_rto = group_df[return_col].astype(str).str.contains("RTO|Courier|Return to Origin", case=False, na=False)
              group_df = group_df[~is_rto]
-             
-             # Optional: Double check to keep Customer Return
-             # is_cust = group_df[return_col].astype(str).str.contains("Customer", case=False, na=False)
-             # group_df = group_df[is_cust]
 
         var_col = "Variation"  # user confirmed
 
