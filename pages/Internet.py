@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="Courier Partner Delivery & Return Analysis",
     layout="wide"
 )
-st.title("📦 Courier Partner Delivery & Return Analysis (Cloud Fix)")
+st.title("📦 Courier Partner Delivery & Return Analysis (Final Stable)")
 
 
 def add_grand_totals(df: pd.DataFrame) -> pd.DataFrame:
@@ -77,10 +77,7 @@ def pivot_to_pdf_stylegroup(pivot_df: pd.DataFrame,
                             title: str = "Style Group Reason Summary",
                             grand_total: int = 0) -> bytes:
     """
-    Style Group reasons ke liye special PDF:
-    - Reason column wide
-    - Text wrapping
-    - Niche TOTAL row mein grand_total dikhe
+    Style Group reasons ke liye special PDF.
     """
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.add_page()
@@ -191,7 +188,7 @@ if uploaded_files:
     # ----------------- Sidebar Filters -----------------
     st.sidebar.header("Filters")
 
-    # 1. Date filter (RESTORED)
+    # 1. Date filter
     if "Return Created Date" in df_all.columns:
         all_dates = sorted(
             str(x) for x in df_all["Return Created Date"].dropna().unique()
@@ -204,7 +201,7 @@ if uploaded_files:
     else:
         selected_dates = []
 
-    # 2. Courier Partner filter (RESTORED)
+    # 2. Courier Partner filter
     if "Courier Partner" in df_all.columns:
         all_couriers = sorted(
             str(x) for x in df_all["Courier Partner"].dropna().unique()
@@ -217,7 +214,7 @@ if uploaded_files:
     else:
         selected_couriers = []
 
-    # 3. Type of Return filter (RESTORED)
+    # 3. Type of Return filter
     if "Type of Return" in df_all.columns:
         all_types = sorted(
             str(x) for x in df_all["Type of Return"].dropna().unique()
@@ -230,7 +227,9 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # 4. SKU Grouping & Filter (CLOUD OPTIMIZED)
+    # 4. SKU Grouping & Filter (RE-ENGINEERED FOR CLOUD STABILITY)
+    final_sku_list = [] # This will hold the final list to filter by
+    
     if "SKU" in df_all.columns:
         df_all["SKU"] = df_all["SKU"].astype(str)
         all_skus = sorted(df_all["SKU"].dropna().unique())
@@ -241,17 +240,14 @@ if uploaded_files:
         # --- Session State Init ---
         if 'sku_groups' not in st.session_state:
             st.session_state['sku_groups'] = []
-        if 'selected_skus_final' not in st.session_state:
-            st.session_state['selected_skus_final'] = []
         
-        # --- CALLBACK FUNCTIONS (Critical for Cloud) ---
+        # --- CALLBACK: Add Group (Only this needs a callback) ---
         def add_group_callback():
-            """Handle adding group before reload."""
-            name = st.session_state.get('new_group_name', '')
-            search = st.session_state.get('new_group_search', '')
+            """Creates a group and clears input to force refresh."""
+            name = st.session_state.new_group_name
+            search = st.session_state.new_group_search
             
             if name and search:
-                # Find matches in global list
                 matches = [s for s in all_skus if search.lower() in s.lower()]
                 if matches:
                     # Update or Append
@@ -263,88 +259,56 @@ if uploaded_files:
                             break
                     if not found:
                         st.session_state["sku_groups"].append({"name": name, "skus": matches})
-                    
-                    st.toast(f"✅ Group '{name}' created with {len(matches)} SKUs!")
+                    st.toast(f"✅ Group '{name}' Saved!")
                 else:
-                    st.toast("⚠️ No SKUs matched that keyword.")
+                    st.toast("⚠️ No SKUs matched.")
             else:
-                st.toast("⚠️ Please enter both Name and Keyword.")
+                st.toast("⚠️ Name & Keyword required.")
 
         def clear_groups_callback():
             st.session_state["sku_groups"] = []
-            st.session_state['selected_skus_final'] = []
-            st.toast("🗑️ All Groups Cleared")
 
-        def update_sku_selection():
-            """Syncs dropdowns with actual data."""
-            chosen_labels = st.session_state.get('group_selector_box', [])
-            include_live = st.session_state.get('live_match_checkbox', True)
+        # --- Group Creation UI ---
+        with st.sidebar.form("group_creator_form", clear_on_submit=True):
+            st.text_input("1. Search SKU keyword", key='new_group_search')
+            st.text_input("2. Group Name", key='new_group_name')
+            c1, c2 = st.columns(2)
+            submitted = c1.form_submit_button("➕ Save Group", on_click=add_group_callback)
+            cleared = c2.form_submit_button("🧹 Clear All", on_click=clear_groups_callback)
+
+        # --- SELECTION LOGIC (DIRECT - NO CALLBACKS) ---
+        # This part runs top-to-bottom every time. No syncing lag.
+        
+        # 1. Get Selected Groups
+        group_options = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
+        selected_group_names = st.sidebar.multiselect("Select Saved Groups", group_options)
+        
+        skus_from_groups = []
+        for label in selected_group_names:
+            # Extract name part (before the parenthesis)
+            # Logic: "Name (Count)" -> split by " (" -> take first part
+            actual_name = label.rsplit(" (", 1)[0]
             
-            group_skus_list = []
-            # Gather SKUs from selected groups
-            for label in chosen_labels:
-                try:
-                    # Format is "1. Name (Count)"
-                    # We extract index carefully
-                    parts = label.split('.')
-                    idx = int(parts[0]) - 1
-                    if 0 <= idx < len(st.session_state['sku_groups']):
-                        group_skus_list.extend(st.session_state['sku_groups'][idx]['skus'])
-                except:
-                    pass
-
-            # Gather SKUs from live search (optional)
-            current_search = st.session_state.get('search_kw_internal', '')
-            manual = [s for s in all_skus if current_search.lower() in s.lower()] if (current_search and include_live) else []
-
-            # Combine and deduplicate
-            final_set = sorted(list(set(group_skus_list + manual)))
-            st.session_state['selected_skus_final'] = final_set
-
-        # --- Group Creation Section ---
-        st.sidebar.text_input("1. Search SKU keyword", key='new_group_search')
-        st.sidebar.text_input("2. Group Name (e.g. Kurti Set A)", key='new_group_name')
-
-        c1, c2 = st.sidebar.columns(2)
-        with c1:
-            # Using on_click ensures this runs BEFORE the page reloads fully
-            st.button("➕ Add Group", on_click=add_group_callback)
-        with c2:
-            st.button("🧹 Clear All", on_click=clear_groups_callback)
-
-        # --- Group Selection Logic ---
-        # Generate labels dynamically
-        if st.session_state["sku_groups"]:
-            labels = [f"{i+1}. {g['name']} ({len(g['skus'])})" for i, g in enumerate(st.session_state["sku_groups"])]
-            
-            st.sidebar.multiselect(
-                "Select Saved Groups",
-                options=labels,
-                key='group_selector_box',
-                on_change=update_sku_selection
-            )
-
+            # Find the group data
+            for g in st.session_state['sku_groups']:
+                if g['name'] == actual_name:
+                    skus_from_groups.extend(g['skus'])
+                    break
+        
+        # 2. Get Manual Selections
         st.sidebar.markdown("---")
+        manual_skus = st.sidebar.multiselect("Add Manual SKUs", all_skus)
         
-        # Live Search + Manual Selection
-        st.sidebar.checkbox("Include live keyword matches", value=True, key='live_match_checkbox', on_change=update_sku_selection)
-        st.sidebar.text_input("Live Search (Add to selection)", value="", key='search_kw_internal', on_change=update_sku_selection)
-
-        # Final Master Selector
-        # Note: We do NOT use on_change here to avoid circular logic loop in Cloud
-        selected_skus = st.sidebar.multiselect(
-            "Final Selected SKUs",
-            options=all_skus,
-            default=st.session_state.get('selected_skus_final', []),
-            key="final_sku_multiselect"
-        )
+        # 3. Combine Both (Union)
+        # This creates the final list dynamically every time
+        combined_set = set(skus_from_groups) | set(manual_skus)
+        final_sku_list = list(combined_set)
         
-        # Force sync if the user manually changes the "Final Selected SKUs" box
-        if selected_skus != st.session_state.get('selected_skus_final', []):
-             st.session_state['selected_skus_final'] = selected_skus
-
-    else:
-        selected_skus = []
+        # Display count to confirm it's working
+        if final_sku_list:
+            st.sidebar.info(f"✨ Filtering by {len(final_sku_list)} SKUs")
+        else:
+            st.sidebar.text("No SKUs selected (Showing All)")
 
     # ----------------- Apply Filters -----------------
     df_filtered = df_all.copy()
@@ -364,9 +328,10 @@ if uploaded_files:
             df_filtered["Type of Return"].isin(selected_types)
         ]
 
-    if "SKU" in df_filtered.columns and selected_skus:
+    # FORCE FILTER using the calculated list
+    if "SKU" in df_filtered.columns and final_sku_list:
         df_filtered = df_filtered[
-            df_filtered["SKU"].astype(str).isin(selected_skus)
+            df_filtered["SKU"].astype(str).isin(final_sku_list)
         ]
 
     # ----------------- KPI Boxes -----------------
