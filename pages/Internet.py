@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="Courier Partner Delivery & Return Analysis",
     layout="wide"
 )
-st.title("📦 Courier Partner Delivery & Return Analysis (Smart Grouping)")
+st.title("📦 Courier Partner Delivery & Return Analysis (Preview & Edit Mode)")
 
 
 def add_grand_totals(df: pd.DataFrame) -> pd.DataFrame:
@@ -223,7 +223,9 @@ if uploaded_files:
     else:
         selected_types = []
 
-    # 4. SKU Grouping & Filter (SMART LOGIC)
+    # -----------------------------------------------------------------
+    # 4. SKU Grouping - PREVIEW & EDIT MODE (MAJOR UPDATE)
+    # -----------------------------------------------------------------
     final_sku_list = [] 
     
     if "SKU" in df_all.columns:
@@ -231,90 +233,100 @@ if uploaded_files:
         all_skus = sorted(df_all["SKU"].dropna().unique())
 
         st.sidebar.markdown("---")
-        st.sidebar.markdown("### 📦 SKU Grouping & Selection")
+        st.sidebar.markdown("### 📦 SKU Group Manager")
 
         # --- Session State Init ---
         if 'sku_groups' not in st.session_state:
             st.session_state['sku_groups'] = []
         
-        # --- CALLBACK: Add Group ---
-        def add_group_callback():
-            name = st.session_state.new_group_name
-            search = st.session_state.new_group_search
+        # --- NEW: Creator Interface with Preview ---
+        with st.sidebar.expander("➕ Create New Group (Preview & Edit)", expanded=False):
+            st.caption("Step 1: Search Keyword")
+            # Using text_input to filter locally first
+            search_keyword = st.text_input("Enter Keyword (e.g. Ramesh)")
             
-            if name and search:
-                matches = [s for s in all_skus if search.lower() in s.lower()]
-                if matches:
+            # Find Matches
+            found_matches = []
+            if search_keyword:
+                found_matches = [s for s in all_skus if search_keyword.lower() in s.lower()]
+            
+            st.caption(f"Step 2: Review & Uncheck unwanted ({len(found_matches)} found)")
+            
+            # This is the magic box - allows user to UNCHECK wrong items before saving
+            selected_for_group = st.multiselect(
+                "Verify SKUs to add:",
+                options=found_matches,
+                default=found_matches, # Pre-select all matches
+                key="preview_multiselect"
+            )
+            
+            st.caption("Step 3: Name & Save")
+            group_name_input = st.text_input("Group Name")
+            
+            def save_filtered_group():
+                if group_name_input and selected_for_group:
+                    # Logic to save
                     found = False
                     for g in st.session_state["sku_groups"]:
-                        if g["name"] == name:
-                            g["skus"] = matches
+                        if g["name"] == group_name_input:
+                            g["skus"] = selected_for_group
                             found = True
                             break
                     if not found:
-                        st.session_state["sku_groups"].append({"name": name, "skus": matches})
-                    st.toast(f"✅ Group '{name}' Saved!")
+                        st.session_state["sku_groups"].append({"name": group_name_input, "skus": selected_for_group})
+                    st.toast(f"✅ Group '{group_name_input}' Saved with {len(selected_for_group)} SKUs!")
                 else:
-                    st.toast("⚠️ No SKUs matched.")
-            else:
-                st.toast("⚠️ Name & Keyword required.")
-
-        def clear_groups_callback():
-            st.session_state["sku_groups"] = []
-
-        # --- Group Creation UI ---
-        with st.sidebar.expander("➕ Create New Group", expanded=False):
-            with st.form("group_creator_form", clear_on_submit=True):
-                st.text_input("1. Search SKU keyword", key='new_group_search')
-                st.text_input("2. Group Name", key='new_group_name')
-                c1, c2 = st.columns(2)
-                submitted = c1.form_submit_button("Save Group", on_click=add_group_callback)
-                cleared = c2.form_submit_button("Clear All", on_click=clear_groups_callback)
+                    st.toast("⚠️ Name and valid selection required.")
+            
+            st.button("💾 Save Verified Group", on_click=save_filtered_group)
+            
+            # Delete button logic
+            if st.button("🧹 Clear All Groups"):
+                st.session_state["sku_groups"] = []
+                st.rerun()
 
         # -------------------------------------------------------------
-        # STEP 1: Select Group (This creates the BASE selection)
+        # SELECTION & VIEWING LOGIC
         # -------------------------------------------------------------
-        group_options = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
-        selected_group_names = st.sidebar.multiselect("1. Select Saved Groups", group_options)
+        st.sidebar.markdown("#### Select & View Groups")
         
+        group_options = [f"{g['name']} ({len(g['skus'])})" for g in st.session_state['sku_groups']]
+        selected_group_labels = st.sidebar.multiselect("1. Select Saved Groups", group_options)
+        
+        # Calculate Group SKUs
         skus_from_groups = []
-        for label in selected_group_names:
+        for label in selected_group_labels:
             actual_name = label.rsplit(" (", 1)[0]
             for g in st.session_state['sku_groups']:
                 if g['name'] == actual_name:
                     skus_from_groups.extend(g['skus'])
                     break
-        
-        # Remove duplicates from group selection
         skus_from_groups = list(set(skus_from_groups))
 
-        # Show visual confirmation
+        # --- NEW: View What's Inside the Selected Group ---
         if skus_from_groups:
-            st.sidebar.success(f"✅ {len(skus_from_groups)} SKUs included from Groups.")
+            with st.sidebar.expander(f"👁️ View SKUs in Selection ({len(skus_from_groups)})"):
+                st.dataframe(pd.DataFrame(skus_from_groups, columns=["Included SKUs"]), hide_index=True)
 
         # -------------------------------------------------------------
-        # STEP 2: Add Extra SKUs (Options EXCLUDE group SKUs)
+        # MANUAL EXTRAS (Smart Filter)
         # -------------------------------------------------------------
-        # Filter options: Only show SKUs that are NOT already in the selected groups
-        # This solves your problem: Group wale SKUs yahan list mein nahi dikhenge!
-        
+        # Show only SKUs that are NOT in the groups
         available_extra_options = sorted(list(set(all_skus) - set(skus_from_groups)))
         
         manual_skus = st.sidebar.multiselect(
-            "2. Add Extra SKUs (Optional)", 
+            "2. Add Extra SKUs (Unique only)", 
             options=available_extra_options,
-            help="SKUs in Groups are hidden here to avoid duplicates."
+            help="Allows adding single SKUs that are not in the selected groups."
         )
         
-        # -------------------------------------------------------------
-        # STEP 3: Final Union
-        # -------------------------------------------------------------
+        # Final Combine
         final_sku_list = list(set(skus_from_groups) | set(manual_skus))
         
         if final_sku_list:
-            st.sidebar.info(f"✨ Total Filtering SKUs: {len(final_sku_list)}")
+            st.sidebar.success(f"✨ Analyzing {len(final_sku_list)} SKUs")
         else:
-            st.sidebar.text("No SKUs selected (Showing All)")
+            st.sidebar.text("Showing All Data")
 
     # ----------------- Apply Filters -----------------
     df_filtered = df_all.copy()
