@@ -16,3 +16,5 @@ pdfplumber
 pytesseract
 pillow
 streamlit-authenticator
+PdfReader
+PdfWriter
